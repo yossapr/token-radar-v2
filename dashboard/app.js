@@ -23,8 +23,7 @@
     [c.comp + c.token + c.aside + c.pre === c.all, `ledger ${c.comp + c.token + c.aside + c.pre} of ${c.all} protocols`],
   ];
 
-  // ---- State in the hash ----
-  const DEF = { tab: 'board', q: '', v: '', tier: '', kind: '', chain: '', sort: 'rank', dir: '1', open: '', dep: '', share: '', fold: '' };
+  const DEF = { tab: 'board', q: '', v: '', tier: '', kind: '', chain: '', sort: 'rank', dir: '1', open: '', dep: '', share: '', fold: '', cmp: '', mdl: '' };
   let S = { ...DEF };
   const readHash = () => { S = { ...DEF }; new URLSearchParams(location.hash.slice(1)).forEach((v, k) => { if (k in S) S[k] = v; }); };
   function set(patch) {
@@ -44,23 +43,24 @@
     return cache.get(k);
   }
 
-  // ---- Small pieces ----
   const chip = (v) => `<span class="v v-${v}">${v}</span>`;
   const delta = (x) => (x == null ? '<span class="dim">n/a</span>' : `<span class="${x >= 0 ? 'up' : 'dn'}">${pct(x)}</span>`);
+  const delta0 = (x) => `<span class="${x >= 0 ? 'up' : 'dn'}">${usd(x)}</span>`;
   const age = (r) => (r.age === null ? '<span class="dim">n/a</span>' : r.age < 1 ? Math.round(r.age * 365) + ' d' : r.age.toFixed(1) + ' yr');
   const lo = Math.log10(Math.min(...R.ranked.map((r) => r.value.p10 * r.odds))), hi = Math.log10(Math.max(...R.ranked.map((r) => r.value.p90 * r.odds)));
   const at = (v) => ((Math.log10(v) - lo) / (hi - lo) * 100).toFixed(1);
   const band = (r) => { const v = r.value, k = r.odds; return `<span class="band"><i class="w" style="left:${at(v.p10 * k)}%;right:${100 - at(v.p90 * k)}%"></i><i class="i" style="left:${at(v.p25 * k)}%;right:${100 - at(v.p75 * k)}%"></i><b style="left:${at(r.implied)}%"></b></span>`; };
+  const kv = (cls, items) => `<dl class="kv ${cls}">${items.map(([t, v]) => `<div><dt>${t}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
   const bar = (p) => `<span class="ob"><i style="width:${p0(p)}"></i></span>`;
 
   function drawTop() {
     const farmN = R.ranked.filter((r) => farm(r).verdict === 'FARM').length;
     const tiles = [
-      ['Out-of-sample miss, walk-forward', x2(m.missWf), `vs ${x2(m.flatWf)} flat`, `${m.wfCount} newest priced peers priced by the older ones; leave-one-out ${x2(m.missLoo)} vs ${x2(m.flatLoo)}`],
-      ['Is the printed range honest?', `${p0(m.honestWf.p50)} · ${p0(m.honestWf.p80)}`, 'vs 50 · 80', `newer caps inside P25–P75 and P10–P90; left out ${p0(m.honestLoo.p50)} · ${p0(m.honestLoo.p80)}`],
+      ['Out-of-sample miss, walk-forward', x2(m.missWf), `vs ${x2(m.flatWf)} flat`, `${m.wfCount} newest peers priced by older ones; left out ${x2(m.missLoo)} vs ${x2(m.flatLoo)}`],
+      ['Is the printed range honest?', `${p0(m.honestWf.p50)} · ${p0(m.honestWf.p80)}`, 'vs 50 · 80', `newer caps inside P25–P75, P10–P90; left out ${p0(m.honestLoo.p50)} · ${p0(m.honestLoo.p80)}`],
       ['Token odds vs base rate, Brier', o.brierWf.toFixed(3), `vs ${o.brierWfBase.toFixed(3)}`, `forward on ${o.wfCount} newer protocols; 10-fold ${o.brier.toFixed(3)} vs ${o.brierBase.toFixed(3)}, AUC ${o.auc.toFixed(2)}`],
-      ['Weight beyond log TVL', p0(1 - m.fits[0].weight), 'held-out', `weights won on both blind tests: growth ${p0(m.termWeight.growth)}, years ${p0(m.termWeight.age)}, category ${p0(m.termWeight.kind)}`],
-      ['Worth farming, this scenario', `${farmN} of ${c.pre}`, `${p0(shareNow())} share`, `net beats $${M.ASSUME.hourTarget} an hour after gas, fees and risk carry; change the share or deposit below`],
+      ['Weight beyond log TVL', p0(1 - m.fits[0].weight), 'held-out', `won on both blind tests: growth ${p0(m.termWeight.growth)}, years ${p0(m.termWeight.age)}, category ${p0(m.termWeight.kind)}`],
+      ['Worth farming, this scenario', `${farmN} of ${c.pre}`, `${p0(shareNow())} share`, `net beats $${M.ASSUME.hourTarget}/h after gas, fees and risk carry`],
       ['Watchlist ranked', `${c.watchRanked} / ${c.watch}`, 'all of it', `plus ${c.pre - c.watchRanked} pre-token protocols below the $50M floor`],
     ];
     $('tiles').innerHTML = tiles.map(([t, big, vs, note]) => `<div class="tile"><p class="tt">${t}</p><p class="big">${big} <small>${vs}</small></p><p class="tn">${note}</p></div>`).join('');
@@ -76,7 +76,7 @@
     const rows = m.fits.map((f) => `<tr><td>${f.id}</td><td class="n">${x2(f.missLoo)}</td><td class="n${f.missWf === best ? ' good' : ''}">${x2(f.missWf)}</td><td class="nw"><span class="wb"><i style="width:${p0(f.weight)}"></i></span>${p0(f.weight)}</td></tr>`).join('');
     const oc = o.coef;
     const H = (a) => `<td class="n">${p0(a.x3)}</td><td class="n">${p0(a.p50)}</td><td class="n">${p0(a.p80)}</td>`;
-    $('evidence').innerHTML = `<div class="lh"><h2>Out-of-sample evidence</h2><span>every candidate is refitted leaving each peer out, and run forward in listing order (peers listed earlier price those listed later)</span></div>
+    $('evidence').innerHTML = `<div class="lh"><h2>Out-of-sample evidence</h2><span>each candidate refitted leaving each peer out, and run forward in listing order</span></div>
       <div class="ev3"><div><h3>Launch value: typical miss on ${m.peers.length} priced peers</h3>
       <table class="mini"><thead><tr><th>Model</th><th>Left out</th><th>Forward</th><th>Weight</th></tr></thead><tbody>
       <tr class="base"><td>flat median mcap/TVL</td><td class="n">${x2(m.flatLoo)}</td><td class="n">${x2(m.flatWf)}</td><td class="dim">baseline</td></tr>${rows}
@@ -90,7 +90,7 @@
       <table class="mini"><thead><tr><th>Share of real caps</th><th>Within ×3</th><th>P25–P75</th><th>P10–P90</th></tr></thead><tbody>
       <tr><td>left out</td>${H(m.honestLoo)}</tr><tr><td>forward</td>${H(m.honestWf)}</tr><tr class="dim"><td>stated</td><td></td><td class="n">50%</td><td class="n">80%</td></tr></tbody></table>
       <p class="sm">Bootstrap (${R.boot.n} refits): size slope ${m.coef.logTVL.toFixed(2)}, 90% ${R.boot.slopeLo.toFixed(2)}–${R.boot.slopeHi.toFixed(2)}; each row's rank range is printed on the board.</p></div></div>
-      <p class="formula"><b>Implied value</b> = launch value (what the token would be worth: the blend above, fitted on stand-alone protocols whose token trades) × token odds (the share of protocols like it, by size, years listed, growth and kind, that record a token). Growth and years move the launch value only by the weight they won held-out; both carry the odds.</p>`;
+      <p class="formula"><b>Implied value</b> = launch value (the blend above, fitted on stand-alone protocols whose token trades) × token odds (the share of protocols like it that record a token).</p>`;
   }
 
   function drawTabs() {
@@ -100,7 +100,6 @@
     document.body.classList.toggle('folded', !!S.fold);
   }
 
-  // ---- Filters and scenario ----
   const chains = [...R.ranked.reduce((mp, r) => { r.chains.forEach((x) => mp.set(x, (mp.get(x) || 0) + 1)); return mp; }, new Map())].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 30).map(([x]) => x);
   function inView(r) {
     const q = S.q.trim().toLowerCase();
@@ -115,45 +114,58 @@
     $('tools').innerHTML = `<div class="row">${seg('v', [['', `All ${base.length}`], ['FARM', `Farm ${n('FARM')}`], ['MARGINAL', `Marginal ${n('MARGINAL')}`], ['SKIP', `Skip ${n('SKIP')}`]])}
       ${seg('tier', [['', 'All tiers'], ['watch', 'Watchlist'], ['early', 'Early, < $50M']])}
       <label>Deposit ${sel('dep', 'Deposit', [['', 'plan size']].concat(M.ASSUME.tiers.map((t) => [String(t), usd(t)])))}</label>
-      <label>Drop share <input id="share" type="range" min="2" max="20" value="${Math.round(shareNow() * 100)}"> <b>${p0(shareNow())}</b></label></div>
+      <label>Drop share <input id="share" type="range" min="2" max="20" value="${Math.round(shareNow() * 100)}"> <b>${p0(shareNow())}</b></label>
+      <label>Model sandbox ${sel('mdl', 'Value model', [['', 'blend, used'], ['tvl', 'log TVL curve only'], ['flat', 'flat multiple']])}</label></div>
       <div class="row"><input id="q" value="${esc(S.q)}" placeholder="Search name, chain, category">
       ${sel('kind', 'Kind', [['', 'All kinds']].concat(M.KINDS.map((k) => [k, KIND_LABEL[k]])))}${sel('chain', 'Chain', [['', 'All chains']].concat(chains.map((x) => [x, x])))}
       <button class="btn" data-reset>Reset</button><button class="btn" data-export="csv">CSV</button><button class="btn" data-export="json">JSON</button>
-      <span class="count" id="count"></span></div>`;
+      <span class="hint">Tick rows to compare · / search · Esc close</span><span class="count" id="count"></span></div>`;
   }
 
-  // ---- Board ----
   const VO = { FARM: 0, MARGINAL: 1, SKIP: 2 };
   const COLS = [['rank', '# · range', (r) => r.rank], ['name', 'Protocol', (r) => r.name.toLowerCase()], ['tvl', 'TVL', (r) => -r.tvl], ['g', '7d', (r) => -(r.change7d || 0)],
     ['age', 'No-token age', (r) => -r.ageUsed], ['odds', 'Token odds', (r) => -r.odds], ['launch', 'If it launches', (r) => -r.value.mid], ['implied', 'Implied value · P25–P75', (r) => -r.implied],
     ['verdict', 'Verdict · net of fees', (r) => VO[farm(r).verdict] * 1e9 - farm(r).hourly], ['hourly', 'Net / hour', (r) => -farm(r).hourly]];
   const shown = () => {
     const col = COLS.find((k) => k[0] === S.sort) || COLS[0], d = Number(S.dir) || 1;
-    return R.ranked.filter((r) => inView(r) && (!S.v || farm(r).verdict === S.v)).sort((a, b) => { const x = col[2](a), y = col[2](b); return (x < y ? -1 : x > y ? 1 : a.rank - b.rank) * d; });
+    const key = S.mdl && col[0] === 'rank' ? (r) => -r.alt[S.mdl] : col[2];
+    return R.ranked.filter((r) => inView(r) && (!S.v || farm(r).verdict === S.v)).sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : a.rank - b.rank) * d; });
   };
   function drawBoard() {
     const rows = shown(), d = Number(S.dir) || 1, up = (k) => (['rank', 'name'].includes(k) ? d > 0 : d < 0);
-    const head = COLS.map(([k, l]) => `<th data-sort="${k}" aria-sort="${S.sort === k ? (up(k) ? 'ascending' : 'descending') : 'none'}">${l}${S.sort === k ? (up(k) ? ' ↑' : ' ↓') : ''}</th>`).join('');
+    const ar = S.mdl ? new Map(R.ranked.slice().sort((a, b) => b.alt[S.mdl] - a.alt[S.mdl]).map((r, i) => [r.slug, i + 1])) : null, picked = S.cmp ? S.cmp.split(',') : [];
+    const head = '<th class="ck"></th>' + COLS.map(([k, l]) => `<th data-sort="${k}" aria-sort="${S.sort === k ? (up(k) ? 'ascending' : 'descending') : 'none'}">${l}${S.sort === k ? (up(k) ? ' ↑' : ' ↓') : ''}</th>`).join('');
     const body = rows.map((r) => { const f = farm(r); return `<tr data-open="${r.slug}"${S.open === r.slug ? ' class="sel"' : ''}>
-      <td class="rk"><b>${r.rank}</b><small>${r.range[0]}–${r.range[1]}</small></td>
+      <td class="ck"><input type="checkbox" data-cmp="${r.slug}"${picked.includes(r.slug) ? ' checked' : ''} aria-label="Compare ${esc(r.name)}"></td>
+      <td class="rk"><b>${r.rank}</b><small>${ar ? `${S.mdl === 'tvl' ? 'curve' : 'flat'} #${ar.get(r.slug)}` : `${r.range[0]}–${r.range[1]}`}</small></td>
       <td class="pn"><b>${esc(r.name)}</b>${r.watch ? '<em class="wl">Watchlist</em>' : '<em class="ea">Early</em>'}<small>${esc(r.category)} · ${esc(r.chains[0])}${r.chains.length > 1 ? ` +${r.chains.length - 1}` : ''}</small></td>
       <td class="n">${usd(r.tvl)}</td><td class="n">${delta(r.change7d)}</td><td class="n">${age(r)}</td><td class="n">${p0(r.odds)}${bar(r.odds)}</td><td class="n">${usd(r.value.mid)}</td>
       <td class="iv"><b class="n">${usd(r.implied)}</b><small>${usd(r.value.p25 * r.odds)}–${usd(r.value.p75 * r.odds)}</small>${band(r)}</td>
       <td>${chip(f.verdict)} <b class="n ${f.net >= 0 ? 'up' : 'dn'}">${usd(f.net)}</b><small>${usd(f.expected)} drop − ${usd(f.fixed + f.carry)} costs · ${usd(f.capital)}</small></td>
       <td class="n ${f.hourly >= 0 ? '' : 'dn'}">${usd(f.hourly)}</td></tr>`; }).join('');
-    $('main').innerHTML = `<div class="tw"><table class="board"><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="10" class="empty">No protocol matches these filters.</td></tr>'}</tbody></table></div>`;
+    const sandbox = ar ? `<p class="formula">Sandbox: rows re-ranked by ${S.mdl === 'tvl' ? 'the log TVL curve alone' : 'one flat mcap/TVL multiple'} (same token odds). ${R.ranked.filter((r) => Math.abs(ar.get(r.slug) - r.rank) > 10).length} of ${c.pre} rows move more than 10 places; the blend is used because it won both blind tests.</p>` : '';
+    $('main').innerHTML = compare(picked) + sandbox + `<div class="tw"><table class="board"><thead><tr>${head}</tr></thead><tbody>${body || '<tr><td colspan="11" class="empty">No protocol matches these filters.</td></tr>'}</tbody></table></div>`;
     const cnt = $('count');
     if (cnt) cnt.textContent = `${rows.length} of ${c.pre} rows · ${usd(rows.reduce((s, r) => s + r.tvl, 0))} TVL · ${usd(rows.reduce((s, r) => s + r.implied, 0))} implied`;
   }
+  /** Side by side: the figures and plan of every ticked row. */
+  function compare(slugs) {
+    const rs = slugs.map((s) => bySlug.get(s)).filter((r) => r && r.rank);
+    if (!rs.length) return '';
+    const line = (label, fn) => `<tr><th>${label}</th>${rs.map((r) => `<td class="n">${fn(r, farm(r))}</td>`).join('')}</tr>`;
+    return `<section class="cmp"><div class="lh"><h2>Compare ${rs.length}</h2><span>ticked rows, side by side</span><button class="btn" data-set="cmp" data-val="${S.cmp}">Clear</button></div><table class="mini"><thead><tr><th></th>${rs.map((r) => `<th><a data-open="${r.slug}">${esc(r.name)}</a></th>`).join('')}</tr></thead><tbody>
+      ${line('Rank · bootstrap range', (r) => `${r.rank} · ${r.range[0]}–${r.range[1]}`)}${line('TVL · 7d', (r) => `${usd(r.tvl)} · ${pct(r.change7d)}`)}${line('Token odds', (r) => p0(r.odds))}
+      ${line('If it launches', (r) => usd(r.value.mid))}${line('Implied value', (r) => usd(r.implied))}${line('Verdict', (r, f) => chip(f.verdict))}
+      ${line('Plan', (r, f) => `${usd(f.capital)} on ${esc(f.chain)}, ${f.hold} d`)}${line('Drop − costs', (r, f) => `${usd(f.expected)} − ${usd(f.fixed + f.carry)}`)}${line('Net · per hour', (r, f) => `${usd(f.net)} · ${usd(f.hourly)}`)}</tbody></table></section>`;
+  }
   function drawList(kind) {
     const rows = R.rows.filter((r) => (kind === 'aside' ? r.status === 'aside' : r.status === 'comp' || r.status === 'token')).sort((a, b) => (b.mcap || 0) - (a.mcap || 0) || b.tvl - a.tvl);
-    const head = kind === 'aside' ? '<th>Protocol</th><th>TVL</th><th>Why it is set aside</th>' : '<th>Protocol</th><th>Token</th><th>TVL</th><th>Market cap</th><th>Cap / TVL</th><th>Cap ÷ held-out model</th><th>Group</th>';
+    const head = kind === 'aside' ? '<th>Protocol</th><th>TVL</th><th>Why it is set aside</th>' : '<th>Protocol</th><th>Token</th><th>TVL</th><th>Market cap</th><th>Cap / TVL</th><th>Cap ÷ held-out model</th>';
     $('main').innerHTML = `<div class="tw"><table class="board"><thead><tr>${head}</tr></thead><tbody>${rows.map((r) => `<tr data-open="${r.slug}"><td class="pn"><b>${esc(r.name)}</b><small>${esc(r.category)}</small></td>${kind === 'aside'
       ? `<td class="n">${usd(r.tvl)}</td><td class="why">${esc(r.reason)}</td>`
-      : `<td>${esc(r.symbol || '')}</td><td class="n">${usd(r.tvl)}</td><td class="n">${r.mcap ? usd(r.mcap) : '<span class="dim">none</span>'}</td><td class="n">${r.mcap ? x2(r.mcap / r.tvl) : ''}</td><td class="n">${r.residual === undefined ? '' : x2(10 ** r.residual)}</td><td class="why">${r.status === 'comp' ? 'priced peer' : 'not used'}</td>`}</tr>`).join('')}</tbody></table></div>`;
+      : `<td>${esc(r.symbol || '')}</td><td class="n">${usd(r.tvl)}</td><td class="n">${r.mcap ? usd(r.mcap) : '<span class="dim">none</span>'}</td><td class="n">${r.mcap ? x2(r.mcap / r.tvl) : ''}</td><td class="n">${r.residual === undefined ? '<span class="dim">not a peer</span>' : x2(10 ** r.residual)}</td>`}</tr>`).join('')}</tbody></table></div>`;
   }
 
-  // ---- Detail ----
   function peersOf(r) {
     const same = m.peers.filter((p) => p.kind === r.kind);
     return (same.length >= 4 ? same : m.peers).slice().sort((a, b) => Math.abs(a.lt - r.lt) - Math.abs(b.lt - r.lt)).slice(0, 6);
@@ -161,7 +173,7 @@
   function detail(r) {
     const head = `<button class="x" data-close aria-label="Close">×</button><p class="crumb">${r.rank ? `#${r.rank} of ${c.pre} by implied value · rank ${r.range[0]}–${r.range[1]} across ${R.boot.n} bootstrap refits` : r.status === 'aside' ? 'Set aside' : 'Token recorded'}</p>
       <h2>${esc(r.name)}</h2><p class="tags">${r.watch ? '<em class="wl">Watchlist</em>' : ''}<span>${esc(r.category)}</span><span>${KIND_LABEL[r.kind]}</span>${r.chains.slice(0, 4).map((x) => `<span>${esc(x)}</span>`).join('')}</p>
-      <dl class="kv"><div><dt>TVL</dt><dd>${usd(r.tvl)}</dd></div><div><dt>7-day</dt><dd>${delta(r.change7d)}</dd></div><div><dt>Listed since</dt><dd>${r.listed || 'n/a'}</dd></div><div><dt>${r.mcap ? 'Market cap' : 'Implied value'}</dt><dd>${usd(r.mcap || r.implied || r.value.mid)}</dd></div></dl>`;
+      ${kv('', [['TVL', usd(r.tvl)], ['7-day', delta(r.change7d)], ['Listed since', r.listed || 'n/a'], [r.mcap ? 'Market cap' : 'Implied value', usd(r.mcap || r.implied || r.value.mid)]])}`;
     if (r.status !== 'pre') return `<section class="card">${head}<p class="why">${esc(r.reason)}</p>${r.residual !== undefined ? `<p class="sm">The blend prices it at ${usd(r.value.mid)}; left out of the fit, its real cap is ${x2(10 ** r.residual)} the model.</p>` : ''}</section>`;
     const p = M.valueParts(r, m.coef), k = m.coef, f = farm(r), plan = f === r.farm ? r.plan : M.farmPlan(r, f, R.asOf);
     const step = (t, how, v) => `<tr><td><b>${t}</b><small>${how}</small></td><td class="n">${v}</td></tr>`;
@@ -179,16 +191,15 @@
       <h3>Nearest priced peers · their tokens trade</h3><table class="mini"><thead><tr><th>Token</th><th>TVL</th><th>Market cap</th><th>Cap/TVL</th><th>Cap ÷ model</th></tr></thead><tbody>
       ${peersOf(r).map((q) => `<tr><td>${esc(q.name)} <span class="dim">${esc(q.symbol || '')}</span></td><td class="n">${usd(q.tvl)}</td><td class="n">${usd(q.mcap)}</td><td class="n">${x2(q.mcap / q.tvl)}</td><td class="n">${x2(10 ** q.residual)}</td></tr>`).join('')}</tbody></table>
       </div><div><h3>Farm verdict ${chip(f.verdict)}</h3>
-      <p class="say">${f.verdict}: ${usd(f.capital)} on ${esc(f.chain)} for ${f.hold} days buys a modelled drop of ${usd(f.expected)} for ${usd(f.fixed + f.carry)} of fees and risk carry and ${f.hours.toFixed(1)} h of work, a net of ${usd(f.net)} (${usd(f.hourly)} an hour).</p>
-      <dl class="kv k6"><div><dt>At risk</dt><dd>${usd(f.capital)}</dd></div><div><dt>Fees + carry</dt><dd>${usd(f.fixed + f.carry)}</dd></div><div><dt>Drop</dt><dd>${usd(f.expected)}</dd></div><div><dt>Net</dt><dd class="${f.net >= 0 ? 'up' : 'dn'}">${usd(f.net)}</dd></div><div><dt>Hands-on</dt><dd>${f.hours.toFixed(1)} h</dd></div><div><dt>Net / hour</dt><dd>${usd(f.hourly)}</dd></div></dl>
-      <p class="sm">Benchmarks: the same money in a 4% T-bill earns ${usd(f.tbill)} over ${f.hold} days · launch odds in the window ${p0(f.launch)} · break-even capital ${f.minViable === null ? 'none' : usd(f.minViable)} · exit if TVL prints below ${usd(r.tvl * 0.75)}.</p>
+      <p class="say">${f.verdict}: ${usd(f.capital)} on ${esc(f.chain)} for ${f.hold} days buys a modelled drop of ${usd(f.expected)} against ${usd(f.fixed + f.carry)} of fees and risk carry.</p>
+      ${kv('k6', [['At risk', usd(f.capital)], ['Fees + carry', usd(f.fixed + f.carry)], ['Drop', usd(f.expected)], ['Net', delta0(f.net)], ['Hands-on', f.hours.toFixed(1) + ' h'], ['Net / hour', usd(f.hourly)]])}
+      <p class="sm">Benchmarks: a 4% T-bill earns ${usd(f.tbill)} over ${f.hold} days · launch odds in the window ${p0(f.launch)} · break-even capital ${f.minViable === null ? 'none' : usd(f.minViable)} · exit if TVL prints below ${usd(r.tvl * 0.75)}.</p>
       <h3>Farm plan · ${plan.length - 1} steps</h3><table class="mini steps"><thead><tr><th>When</th><th>Step</th><th>Cost</th><th>Time</th></tr></thead><tbody>
       ${plan.map((s) => (s.cost === null ? '' : `<tr><td class="when">${s.when}</td><td><b>${s.step}</b> ${esc(s.text.slice(s.text.indexOf(': ') + 2).replace(/ Cost [^,]*, about [^.]*\.$/, ''))}</td><td class="n">${s.cost > 0 && s.cost < 1 ? '$' + s.cost.toFixed(2) : usd(s.cost)}</td><td class="n">${s.minutes}m</td></tr>`)).join('')}
       <tr class="tot"><td></td><td>All in: net ${usd(f.net)} (P25 ${usd(f.netLo)}, P75 ${usd(f.netHi)})</td><td class="n">${usd(f.fixed + f.carry)}</td><td class="n">${f.hours.toFixed(1)}h</td></tr></tbody></table>
       <h3>Drop share × deposit: net of fees</h3><table class="mini grid"><thead><tr><th>Share</th>${deps.map((C) => `<th>${C === f.capital ? 'plan ' : ''}${usd(C)}</th>`).join('')}</tr></thead><tbody>${grid}</tbody></table></div></div></section>`;
   }
 
-  // ---- Export the current view ----
   function exportView(kind) {
     const rows = shown().map((r) => { const f = farm(r); return { rank: r.rank, slug: r.slug, name: r.name, tvl_usd: r.tvl, change_7d: r.change7d, token_odds: +r.odds.toFixed(4), launch_value_usd: Math.round(r.value.mid), implied_value_usd: r.implied, verdict: f.verdict, capital_usd: f.capital, net_usd: Math.round(f.net), hours: +f.hours.toFixed(2) }; });
     const text = kind === 'json' ? JSON.stringify(rows, null, 1) : [Object.keys(rows[0] || {}).join(',')].concat(rows.map((r) => Object.values(r).map((v) => (typeof v === 'string' && /[",]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(','))).join('\n');
@@ -208,10 +219,11 @@
   }
 
   document.addEventListener('click', (ev) => {
-    const t = ev.target.closest('[data-set],[data-sort],[data-open],[data-close],[data-reset],[data-export]');
+    const t = ev.target.closest('[data-cmp],[data-set],[data-sort],[data-open],[data-close],[data-reset],[data-export]');
     if (!t) return;
     const d = t.dataset;
-    if (d.set) set({ [d.set]: S[d.set] === d.val && d.set !== 'tab' ? '' : d.val, open: d.set === 'tab' ? '' : S.open });
+    if (d.cmp) { const l = S.cmp ? S.cmp.split(',') : [], i = l.indexOf(d.cmp); if (i >= 0) l.splice(i, 1); else l.push(d.cmp); set({ cmp: l.slice(-4).join(',') }); }
+    else if (d.set) set({ [d.set]: S[d.set] === d.val && d.set !== 'tab' ? '' : d.val, open: d.set === 'tab' ? '' : S.open });
     else if (d.sort) set({ sort: d.sort, dir: S.sort === d.sort ? String(-Number(S.dir)) : '1' });
     else if (d.open) set({ open: d.open });
     else if (d.close !== undefined) set({ open: '' });
@@ -219,8 +231,11 @@
     else exportView(d.export);
   });
   document.addEventListener('input', (ev) => { if (ev.target.id === 'q') { S.q = ev.target.value; drawBoard(); } if (ev.target.id === 'share') set({ share: ev.target.value }); });
-  document.addEventListener('change', (ev) => { if (['dep', 'kind', 'chain', 'q'].includes(ev.target.id)) set({ [ev.target.id]: ev.target.value }); });
-  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && S.open) set({ open: '' }); });
+  document.addEventListener('change', (ev) => { if (['dep', 'kind', 'chain', 'q', 'mdl'].includes(ev.target.id)) set({ [ev.target.id]: ev.target.value }); });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && S.open) set({ open: '' });
+    if (ev.key === '/' && ev.target.tagName !== 'INPUT' && $('q')) { ev.preventDefault(); $('q').focus(); }
+  });
   window.addEventListener('hashchange', () => { readHash(); draw(); });
   readHash();
   draw();

@@ -1,6 +1,6 @@
-/* Pre-token radar model, one plain script. main.ts runs it in Node to write board.json; the page runs the same
- * file and rebuilds the board from the raw snapshot, then checks it against board.json (rows, order, totals,
- * checksum). No protocol is named in the code: every figure comes from the snapshot or a stated assumption. */
+/* Pre-token radar model. main.ts runs it in Node to write board.json; the page runs the same file, rebuilds the
+ * board from the raw snapshot and checks it against board.json. No protocol is named: every figure comes from the
+ * snapshot or a stated assumption. */
 (function (root) {
   'use strict';
 
@@ -148,7 +148,7 @@
     const flatWf = forward(med, (m, i) => ratio[i] - m).map(([, e]) => e);
     const honesty = (es) => ({ x3: share(es, (e) => Math.abs(e) <= Math.log10(3)), p50: share(es, (e) => e >= band.p25 && e <= band.p75), p80: share(es, (e) => e >= band.p10 && e <= band.p90) });
     const weightOf = (t) => fits.filter((f) => f.terms.includes(t)).reduce((a, f) => a + f.weight, 0);
-    return { peers, y, fits, coef, band, blendCoef, wfCount: we.length,
+    return { peers, y, fits, coef, band, blendCoef, wfCount: we.length, flatRatio: med(ratio.map((_, i) => i)),
       missLoo: miss(le), missWf: miss(we), rmsLoo: rms(le), rmsWf: rms(we), flatLoo: miss(flatLoo), flatWf: miss(flatWf), flatRms: rms(flatLoo),
       honestLoo: honesty(le), honestWf: honesty(we), termWeight: { growth: weightOf('growth'), age: weightOf('age'), kind: weightOf('kind') },
       residual: new Map(peers.map((r, i) => [r.slug, le[i]])) };
@@ -215,13 +215,13 @@
   const entryFee = (c) => (c === 'Ethereum' || c === 'Bitcoin' ? 4 : 1);
   /** What a reader does, by kind: [step, when, what, transactions, minutes]. */
   const PLAYBOOK = {
-    vault: (C) => [['Deposit', 'Day 0', `deposit ${usd(C)} USDC into its largest USDC vault (approve + deposit); note whether the receipt token earns points where it is held`, 2, 10]],
+    vault: (C) => [['Deposit', 'Day 0', `deposit ${usd(C)} USDC into its largest USDC vault (approve + deposit)`, 2, 10]],
     lend: (C) => [['Supply', 'Day 0', `supply ${usd(C)} USDC (approve + supply)`, 2, 10], ['Borrow', 'Day 0', `borrow ${usd(C * 0.3)} of a second asset and resupply it once, health factor above 2, so both sides earn points`, 2, 15]],
     dex: (C) => [['Provide', 'Day 0', `add ${usd(C)} as liquidity in its deepest stable or major pair (two approvals + add)`, 3, 15], ['Trade', 'Weekly', `route about ${usd(C * 0.1)} of swaps through it each week`, 0, 0]],
     perp: (C) => [['Margin', 'Day 0', `deposit ${usd(C)} as margin (approve + deposit)`, 2, 10], ['Trade', 'Weekly', `trade about ${usd(C * 8)} of volume over the season on majors at 2x or less; fees near 0.05%`, 6, 60]],
     yield: (C) => [['Mint', 'Day 0', `mint or deposit ${usd(C)} into its yield token or vault (approve + mint); do not loop it`, 2, 10]],
     rwa: (C) => [['Onboard', 'Day 0', 'pass its KYC or whitelist: 30 minutes of forms, then 1 to 3 days of waiting', 0, 30], ['Subscribe', 'Day 3', `subscribe ${usd(C)} once whitelisted (approve + subscribe)`, 2, 10]],
-    stake: (C) => [['Stake', 'Day 0', `stake or restake ${usd(C)} of the asset it accepts (approve + stake); note the unbonding delay before counting on exit`, 2, 15]],
+    stake: (C) => [['Stake', 'Day 0', `stake or restake ${usd(C)} of the asset it accepts (approve + stake); mind the unbonding delay`, 2, 15]],
     infra: (C) => [['Use', 'Monthly', `use the product with ${usd(C)}: four round trips over the season (bridge, pay or mint and back)`, 8, 40]],
   };
   /** Days to hold: long on record means fewer seasons left before a snapshot, so a shorter plan. */
@@ -257,8 +257,8 @@
   function farmPlan(r, e, asOf) {
     const C = e.capital, g = e.gas, H = e.hold, out = [], cost = (x) => (x > 0 && x < 0.995 ? `$${x.toFixed(2)}` : usd(x));
     const add = (step, when, text, dollars, minutes) => out.push({ step, when, text: `${step} (${when}): ${text}`, cost: dollars, minutes });
-    add('Wallet', 'Day 0', 'set up a fresh wallet used only for this farm (hardware-backed if you hold more than a few thousand dollars). Cost $0, about 10 min.', 0, 10);
-    add('Verify', 'Day 0', `DefiLlama records no token for ${r.name} on ${asOf}; check its docs, X and CoinGecko for a live token or a points page and match the contract addresses; never sign from a link in a DM. Cost $0, about 15 min.`, 0, 15);
+    add('Wallet', 'Day 0', 'a fresh wallet used only for this farm, hardware-backed above a few thousand dollars. Cost $0, about 10 min.', 0, 10);
+    add('Verify', 'Day 0', `DefiLlama records no token for ${r.name} on ${asOf}; check its docs, X and CoinGecko for a live token or points page, match contract addresses, never sign from a DM link. Cost $0, about 15 min.`, 0, 15);
     const fee = entryFee(e.chain);
     add('Fund', 'Day 0', `withdraw ${usd(C)} USDC from an exchange straight to ${e.chain}${r.chains.length > 1 ? `, the cheapest of its ${r.chains.length} chains` : ', its only chain'}, keeping gas for ${e.tx} transactions at about ${cost(g)}. Cost ${cost(fee)}, about 15 min.`, fee, 15);
     e.actions.forEach(([step, when, what, tx, min]) => {
@@ -268,7 +268,7 @@
     });
     add('Hold', `Days 1-${H}`, `keep it in ${H} days and check points and TVL weekly (${e.weeks} x 5 min). Carry: ${(e.risk * 365 / H * 100).toFixed(1)}% a year of contract and depeg risk on ${usd(C)} = ${usd(C * e.risk)}.`, C * e.risk, e.weeks * 5);
     add('Exit rule', 'Any day', `withdraw if TVL prints below ${usd(r.tvl * 0.75)} (25% under today's ${usd(r.tvl)}; this week ${pct(r.change7d)}), if the points terms change, or if a token is announced with its snapshot past. Cost ${cost(g)}, about 10 min.`, g, 10);
-    add('Record', `Weekly x${e.weeks}`, 'log every transaction (date, hash, asset, amount, dollar value): a claim may ask the wallet to prove its history, and a drop is taxable in many places. Cost $0, about 2 min a week.', 0, e.weeks * 2);
+    add('Record', `Weekly x${e.weeks}`, 'log each transaction (date, hash, asset, amount, dollar value): claims may ask for history, and drops are taxable in many places. Cost $0, about 2 min a week.', 0, e.weeks * 2);
     add('Claim', `Day ${H}+`, `if a token lists, claim and sell or hedge half on day one. At ${(e.share * 100).toFixed(0)}% of supply to farmers and ${(e.launch * 100).toFixed(0)}% launch odds in the window, ${usd(C)} earns about ${usd(e.expected)} (P25 ${usd(e.expectedLo)}, P75 ${usd(e.expectedHi)}). Cost ${cost(g)}, about 15 min.`, g, 15);
     out.push({ step: 'Verdict', when: '', text: `Verdict ${e.verdict}: net about ${usd(e.net)} (P25 ${usd(e.netLo)}) for ${e.hours.toFixed(1)} h of your time = ${usd(e.hourly)} an hour against a ${usd(ASSUME.hourTarget)} target; the same money in a 4% T-bill earns ${usd(e.tbill)}. Break-even capital: ${e.minViable === null ? 'none, the risk carry beats the drop at any size' : usd(e.minViable)}.`, cost: null, minutes: null });
     return out;
@@ -325,6 +325,9 @@
       r.plan = farmPlan(r, r.farm, snap.as_of);
     });
     const boot = bootstrap(model, pre, 200);
+    // The page's model sandbox: the same odds on the single best-tested curve, and on one flat multiple.
+    const [a, b] = model.fits[0].coef;
+    pre.forEach((r) => { r.alt = { tvl: 10 ** (a + b * r.lt) * r.odds, flat: 10 ** (r.lt + model.flatRatio) * r.odds }; });
     const count = (s) => rows.filter((r) => r.status === s).length;
     return { asOf: snap.as_of, source: snap.source, floor: snap.floor_usd, rows, ranked, model, odds, boot, share: sh, checksum: checksum(ranked),
       total: ranked.reduce((s, r) => s + r.implied, 0),
