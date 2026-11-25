@@ -72,7 +72,8 @@ mkdirSync(out, { recursive: true });
 const head = JSON.stringify({ as_of: snapshot.as_of, source: snapshot.source }).slice(0, -1);
 writeFileSync(join(out, 'board.json'), `${head},"rows":[\n${rows.map((r: unknown) => JSON.stringify(r)).join(',\n')}\n]}\n`);
 const board = rows.map((r: { slug: string; rank: number; implied_value_usd: number; farm_verdict: string }) => [r.slug, r.rank, r.implied_value_usd, r.farm_verdict]);
-writeFileSync(join(out, 'data.js'), `window.RADAR_INPUT = ${JSON.stringify({ snapshot, board })};\n`);
+// The page rebuilds the board from `snapshot` and checks rows, order, totals and this checksum against what is written here.
+writeFileSync(join(out, 'data.js'), `window.RADAR_INPUT = ${JSON.stringify({ snapshot, board, checksum: radar.checksum })};\n`);
 
 function copyFiles(from: string, to: string): string[] {
   if (!existsSync(from)) return [];
@@ -98,6 +99,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 const c = radar.counts;
 process.stdout.write(
   `pre-token radar: ${c.all} protocols: ${c.comp} priced peers, ${c.token} other tokens, ${c.aside} set aside, ${c.pre} ranked (watchlist ${c.watchRanked}/${c.watch})\n` +
-    `pre-token radar: value fit on ${radar.model.peers} peers, held-out RMS log error ${radar.model.rmsLoo.toFixed(3)} (leave-one-out), ${radar.model.rmsWf.toFixed(3)} (walk-forward); token odds AUC ${radar.odds.auc.toFixed(2)}\n` +
+    `pre-token radar: launch value fit on ${radar.model.peers.length} stand-alone peers, median held-out miss x${radar.model.missLoo.toFixed(2)} (leave-one-out), x${radar.model.missWf.toFixed(2)} (walk-forward) vs x${radar.model.flatLoo.toFixed(2)}, x${radar.model.flatWf.toFixed(2)} flat\n` +
+    `pre-token radar: token odds Brier ${radar.odds.brierWf.toFixed(3)} forward vs ${radar.odds.brierWfBase.toFixed(3)} base rate; board checksum ${radar.checksum}, total ${radar.total}\n` +
     `pre-token radar: wrote board.json, data.js, dashboard/ (${pages.length} files), screenshots/ (${shots.length}) and dossier.json to ${out}\n`,
 );

@@ -8,16 +8,16 @@
 </head>
 <body>
 <header class="mast">
-  <div class="brand"><span class="mark" aria-hidden="true"></span><div><p class="kicker">Pre-token radar</p><h1>Which launches are worth farming</h1></div></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span><div><h1>Pre-token radar</h1><p class="sub">Protocols with no token recorded, valued from the snapshot's own priced peers</p></div></div>
   <p class="src" id="src"></p>
 </header>
-<section class="ledger" id="ledger" aria-label="Where every protocol in the snapshot went"></section>
+<section class="tiles" id="tiles" aria-label="Headline evidence"></section>
+<section class="ledger" id="ledger" aria-label="Where every protocol went, and the board checks"></section>
+<section class="evidence" id="evidence" aria-label="Out-of-sample evidence"></section>
 <nav class="tabs" id="tabs" aria-label="Views"></nav>
-<section class="filters" id="filters" aria-label="Filters"></section>
-<div class="layout">
-  <main id="main" tabindex="-1"></main>
-  <aside id="rail" aria-label="Model and detail"></aside>
-</div>
+<section class="tools" id="tools" aria-label="Filters and scenario"></section>
+<main id="main" tabindex="-1"></main>
+<aside id="detail" aria-label="Protocol detail"></aside>
 <script src="model.js"></script>
 <script src="../data.js"></script>
 <script src="app.js"></script>

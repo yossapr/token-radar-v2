@@ -1,380 +1,280 @@
-/* Pre-token radar: the whole model in one plain script.
- * main.ts runs this file in Node to write board.json; the page runs the same file in the browser and
- * rebuilds the board from the raw snapshot, then checks it against board.json row by row.
- * Nothing here names a protocol: every number comes from the snapshot's figures or a stated assumption. */
+/* Pre-token radar model, one plain script. main.ts runs it in Node to write board.json; the page runs the same
+ * file and rebuilds the board from the raw snapshot, then checks it against board.json (rows, order, totals,
+ * checksum). No protocol is named in the code: every figure comes from the snapshot or a stated assumption. */
 (function (root) {
   'use strict';
 
-  // ---------- 1. What the snapshot says about each protocol ----------
-  const SET_ASIDE_CATEGORIES = ['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX'];
+  // ---------- 1. Place every protocol ----------
+  const SET_ASIDE = ['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX'];
   const EXCHANGES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
   const VERSION_MARK = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
   const DERIVATIVE_WORD = /\b(wrapped|staked|staking)\b/i;
-
-  /** DefiLlama category -> the farming kind that decides the playbook and the category term. */
-  const KIND_OF = {
-    'Risk Curators': 'vault', 'Onchain Capital Allocator': 'vault', 'Liquidity Manager': 'vault', 'Yield Aggregator': 'vault',
-    'Indexes': 'vault', 'Leveraged Farming': 'vault', 'Farm': 'vault',
-    'Lending': 'lend', 'CDP': 'lend', 'CDP Manager': 'lend', 'Uncollateralized Lending': 'lend', 'Collateral Management': 'lend',
-    'Dexs': 'dex', 'Derivatives': 'perp', 'Options': 'perp', 'Synthetics': 'perp', 'Prediction Market': 'perp',
-    'Yield': 'yield', 'Basis Trading': 'yield', 'Dual-Token Stablecoin': 'yield', 'Algo-Stables': 'yield', 'Stablecoin Wrapper': 'yield',
-    'Anchor BTC': 'yield', 'CeDeFi': 'yield', 'RWA': 'rwa',
-    'Restaking': 'stake', 'Staking Pool': 'stake', 'Collateral Markets': 'stake', 'Decentralized BTC': 'stake', 'Governance Incentives': 'stake',
-    'Liquid Staking': 'stake', 'Liquid Restaking': 'stake', 'Restaked BTC': 'stake',
-  };
+  /** DefiLlama category -> farming kind (the playbook and the category term). Unlisted categories are infra. */
+  const KIND_OF = {};
+  [['vault', 'Risk Curators|Onchain Capital Allocator|Liquidity Manager|Yield Aggregator|Indexes|Leveraged Farming|Farm'],
+    ['lend', 'Lending|CDP|CDP Manager|Uncollateralized Lending|Collateral Management'], ['dex', 'Dexs'],
+    ['perp', 'Derivatives|Options|Synthetics|Prediction Market'],
+    ['yield', 'Yield|Basis Trading|Dual-Token Stablecoin|Algo-Stables|Stablecoin Wrapper|Anchor BTC|CeDeFi'], ['rwa', 'RWA'],
+    ['stake', 'Restaking|Staking Pool|Collateral Markets|Decentralized BTC|Governance Incentives|Liquid Staking|Liquid Restaking|Restaked BTC'],
+  ].forEach(([k, cats]) => cats.split('|').forEach((c) => { KIND_OF[c] = k; }));
   const KINDS = ['vault', 'lend', 'dex', 'perp', 'yield', 'rwa', 'stake', 'infra'];
   const KIND_LABEL = { vault: 'Vault / curator', lend: 'Lending', dex: 'DEX', perp: 'Perps & markets', yield: 'Yield & stables', rwa: 'RWA', stake: 'Staking', infra: 'Infra & chain' };
-  const kindOf = (category) => KIND_OF[category] || 'infra';
-
-  const DAY = 86400000;
-  const yearsBetween = (from, to) => (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / DAY / 365.25;
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-  /** A 7-day change in per cent, clipped to +-40% so one spike cannot run the fit, as a log growth factor. */
-  const growthTerm = (change7d) => Math.log10(1 + clamp(change7d == null ? 0 : change7d, -40, 40) / 100);
+  const years = (from, to) => (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 864e5 / 365.25;
+  /** 7-day change in per cent, clipped to +-40% so one spike cannot run a fit, as log10 of the growth factor. */
+  const growthTerm = (g) => Math.log10(1 + clamp(g == null ? 0 : g, -40, 40) / 100);
 
-  /** Why a protocol is or is not a pre-token subject. Returns { status, reason }. */
   function classify(p, ctx) {
-    const hasToken = p.gecko_id !== null || p.symbol !== null;
-    if (hasToken) {
-      return p.mcap_usd > 0
-        ? { status: 'comp', reason: `token ${p.symbol || p.gecko_id} trades at a recorded market cap: a priced peer for the fit` }
-        : { status: 'token', reason: `records token ${p.symbol || p.gecko_id} with no market cap: a token exists, so not pre-token` };
+    if (p.gecko_id !== null || p.symbol !== null) {
+      const t = p.symbol || p.gecko_id;
+      if (!(p.mcap_usd > 0)) return ['token', `records token ${t} with no market cap: a token exists, so not pre-token`];
+      return SET_ASIDE.includes(p.category) ? ['token', `token ${t} trades, but a ${p.category} product is not a stand-alone peer`]
+        : ['comp', `token ${t} trades at a recorded market cap: a stand-alone priced peer for the fit`];
     }
-    if (ctx.watch.has(p.slug)) return { status: 'pre', reason: 'on the house watchlist: no token recorded, no parent' };
-    if (SET_ASIDE_CATEGORIES.includes(p.category)) return { status: 'aside', reason: `category ${p.category}: a wrapped, staked or bridged product, not a launch` };
-    if (VERSION_MARK.test(p.name)) return { status: 'aside', reason: 'name ends in a version marker: a later version of a protocol already counted' };
-    if (DERIVATIVE_WORD.test(p.name)) return { status: 'aside', reason: 'name says wrapped, staked or staking: a derivative of another asset' };
-    if (EXCHANGES.some((x) => p.name.startsWith(x))) return { status: 'aside', reason: 'name begins with an exchange: an exchange product, not a launch' };
-    if (p.tvl_usd >= ctx.floor) return { status: 'aside', reason: 'above the floor and passes the name rules, yet the house rule left it out: DefiLlama names a parent' };
+    if (ctx.watch.has(p.slug)) return ['pre', 'on the house watchlist: no token recorded, no parent'];
+    if (SET_ASIDE.includes(p.category)) return ['aside', `category ${p.category}: a wrapped, staked or bridged product, not a launch`];
+    if (VERSION_MARK.test(p.name)) return ['aside', 'name ends in a version marker: a later version of a protocol already counted'];
+    if (DERIVATIVE_WORD.test(p.name)) return ['aside', 'name says wrapped, staked or staking: a derivative of another asset'];
+    if (EXCHANGES.some((x) => p.name.startsWith(x))) return ['aside', 'name begins with an exchange: an exchange product'];
+    if (p.tvl_usd >= ctx.floor) return ['aside', 'above the floor and passes the name rules, yet the house rule left it out: DefiLlama names a parent'];
     const head = p.name.split(' ')[0].toLowerCase();
-    if (head.length >= 3 && ctx.tokenHeads.has(head)) return { status: 'aside', reason: `shares its first word with a protocol whose token trades (${ctx.tokenHeads.get(head)}): a family product` };
-    return { status: 'pre', reason: 'below the floor, no token recorded, passes every derivative rule' };
+    if (head.length >= 3 && ctx.heads.has(head)) return ['aside', `shares its first word with ${ctx.heads.get(head)}, whose token is recorded: a family product`];
+    return ['pre', 'below the floor, no token recorded, passes every derivative rule'];
   }
 
-  /** One row per protocol with the derived figures every later step reads. */
-  function prepare(snapshot) {
-    const watch = new Set(snapshot.watchlist);
-    const tokenHeads = new Map();
-    for (const p of snapshot.protocols) if (p.gecko_id !== null || p.symbol !== null) {
-      const head = p.name.split(' ')[0].toLowerCase();
-      if (!tokenHeads.has(head)) tokenHeads.set(head, p.name);
+  function prepare(snap) {
+    const watch = new Set(snap.watchlist), heads = new Map();
+    for (const p of snap.protocols) if (p.gecko_id !== null || p.symbol !== null) {
+      const h = p.name.split(' ')[0].toLowerCase();
+      if (!heads.has(h)) heads.set(h, p.name);
     }
-    const ctx = { watch, tokenHeads, floor: snapshot.floor_usd };
-    const known = snapshot.protocols.filter((p) => p.listed_at).map((p) => yearsBetween(p.listed_at, snapshot.as_of)).sort((a, b) => a - b);
-    const medianAge = quantile(known, 0.5);
-    return snapshot.protocols.map((p) => {
-      const c = classify(p, ctx);
-      const age = p.listed_at ? yearsBetween(p.listed_at, snapshot.as_of) : null;
-      return {
-        slug: p.slug, name: p.name, category: p.category || 'Uncategorised', kind: kindOf(p.category), chains: p.chains,
-        tvl: p.tvl_usd, change7d: p.change_7d, mcap: p.mcap_usd, symbol: p.symbol, listed: p.listed_at,
-        age, ageUsed: age === null ? medianAge : age, watch: watch.has(p.slug), status: c.status, reason: c.reason,
-        lt: Math.log10(p.tvl_usd), lg: growthTerm(p.change_7d),
-      };
+    const ages = sortNum(snap.protocols.filter((p) => p.listed_at).map((p) => years(p.listed_at, snap.as_of)));
+    const medAge = quantile(ages, 0.5), ctx = { watch, heads, floor: snap.floor_usd };
+    return snap.protocols.map((p) => {
+      const [status, reason] = classify(p, ctx), age = p.listed_at ? years(p.listed_at, snap.as_of) : null;
+      return { slug: p.slug, name: p.name, category: p.category || 'Uncategorised', kind: KIND_OF[p.category] || 'infra', chains: p.chains,
+        tvl: p.tvl_usd, change7d: p.change_7d, mcap: p.mcap_usd, symbol: p.symbol, listed: p.listed_at, age,
+        ageUsed: age === null ? medAge : age, watch: watch.has(p.slug), status, reason, lt: Math.log10(p.tvl_usd), lg: growthTerm(p.change_7d) };
     });
   }
 
-  // ---------- 2. Small numerics: ridge least squares, quantiles, ranks ----------
-  /** Solve A x = b by Gaussian elimination with partial pivoting (A is small and symmetric positive). */
-  function solve(A, b) {
+  // ---------- 2. Numerics ----------
+  function solve(A, b) { // Gaussian elimination with partial pivoting
     const n = b.length, M = A.map((r, i) => r.concat([b[i]]));
     for (let c = 0; c < n; c++) {
-      let piv = c;
-      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
-      [M[c], M[piv]] = [M[piv], M[c]];
-      for (let r = c + 1; r < n; r++) {
-        const f = M[r][c] / M[c][c];
-        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
-      }
+      let p = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      [M[c], M[p]] = [M[p], M[c]];
+      for (let r = c + 1; r < n; r++) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
     }
     const x = new Array(n).fill(0);
-    for (let r = n - 1; r >= 0; r--) {
-      let s = M[r][n];
-      for (let k = r + 1; k < n; k++) s -= M[r][k] * x[k];
-      x[r] = s / M[r][r];
-    }
+    for (let r = n - 1; r >= 0; r--) { let s = M[r][n]; for (let k = r + 1; k < n; k++) s -= M[r][k] * x[k]; x[r] = s / M[r][r]; }
     return x;
   }
-  /** Ridge fit: minimise |y - Xb|^2 + sum(pen_j b_j^2). The intercept and log TVL carry no penalty. */
+  /** Ridge least squares: minimise |y - Xb|^2 + sum(pen_j b_j^2). */
   function fitRidge(X, y, pen) {
-    const p = pen.length, A = [], b = new Array(p).fill(0);
-    for (let i = 0; i < p; i++) A.push(new Array(p).fill(0));
+    const p = pen.length, A = pen.map(() => new Array(p).fill(0)), b = new Array(p).fill(0);
     X.forEach((x, n) => { for (let i = 0; i < p; i++) { b[i] += x[i] * y[n]; for (let j = 0; j < p; j++) A[i][j] += x[i] * x[j]; } });
-    for (let i = 0; i < p; i++) A[i][i] += pen[i];
+    pen.forEach((v, i) => { A[i][i] += v; });
     return solve(A, b);
   }
   const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
-  function quantile(sorted, q) {
-    if (!sorted.length) return 0;
-    const at = (sorted.length - 1) * q, lo = Math.floor(at), hi = Math.ceil(at);
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (at - lo);
-  }
   const sortNum = (xs) => xs.slice().sort((a, b) => a - b);
-  const medianAbs = (es) => quantile(sortNum(es.map(Math.abs)), 0.5);
+  function quantile(s, q) {
+    if (!s.length) return 0;
+    const at = (s.length - 1) * q, lo = Math.floor(at), hi = Math.ceil(at);
+    return s[lo] + (s[hi] - s[lo]) * (at - lo);
+  }
+  const miss = (es) => 10 ** quantile(sortNum(es.map(Math.abs)), 0.5); // median held-out miss as a factor
   const rms = (es) => Math.sqrt(es.reduce((s, e) => s + e * e, 0) / es.length);
-  function ranks(xs) {
-    const order = xs.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]), r = new Array(xs.length);
-    order.forEach(([, i], k) => { r[i] = k; });
-    return r;
+  const share = (es, f) => es.filter(f).length / es.length;
+  /** Seeded generator for the bootstrap, so two runs write the same bytes. */
+  function rng(seed) {
+    return () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   }
-  function spearman(a, b) {
-    const ra = ranks(a), rb = ranks(b), n = a.length, ma = (n - 1) / 2;
-    let sab = 0, saa = 0, sbb = 0;
-    for (let i = 0; i < n; i++) { sab += (ra[i] - ma) * (rb[i] - ma); saa += (ra[i] - ma) ** 2; sbb += (rb[i] - ma) ** 2; }
-    return sab / Math.sqrt(saa * sbb);
+  /** FNV-1a over the board's slug, rank and value: main.ts prints it, the page recomputes it. */
+  function checksum(rows) {
+    let h = 0x811c9dc5;
+    for (const ch of rows.map((r) => `${r.slug}|${r.rank}|${r.implied}`).join('\n')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16).padStart(8, '0');
   }
+  /** Listing order for the forward tests: dated rows only, earliest first. */
+  const byListing = (rows) => rows.map((r, i) => [r.listed, i]).filter(([d]) => d).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
 
-  // ---------- 3. The value model: priced peers, candidate terms, two blind tests, evidence weights ----------
-  /** Candidate value terms. Each model is log TVL plus a subset; every one is tested on held-out peers. */
-  const TERMS = {
-    growth: { label: '7-day TVL growth', short: 'growth', cols: () => ['growth'] },
-    age: { label: 'Years on record', short: 'years', cols: () => ['age'] },
-    kind: { label: 'Category multiple', short: 'category', cols: () => KINDS.map((k) => 'k_' + k) },
-  };
+  // ---------- 3. Launch value: what the token would be worth, priced off stand-alone peers whose token trades ----------
+  const TERMS = { growth: '7-day growth', age: 'years listed', kind: 'category' };
   const MODELS = [[], ['growth'], ['age'], ['kind'], ['growth', 'age'], ['growth', 'age', 'kind']];
-  const modelId = (terms) => ['log TVL'].concat(terms.map((t) => TERMS[t].short)).join(' + ');
-
-  function columns(terms) {
-    const cols = ['intercept', 'logTVL'];
-    terms.forEach((t) => cols.push(...TERMS[t].cols()));
-    return cols;
-  }
-  function featureOf(row, col) {
-    if (col === 'intercept') return 1;
-    if (col === 'logTVL') return row.lt;
-    if (col === 'growth') return row.lg;
-    if (col === 'age') return row.ageUsed;
-    return row.kind === col.slice(2) ? 1 : 0;
-  }
-  const penaltyOf = (col) => (col === 'intercept' || col === 'logTVL' ? 0 : col.startsWith('k_') ? 2 : 0.05);
-
-  /** Leave-one-out: refit without each peer and record how far the fit misses it, in log10 units. */
-  function looPredictions(X, y, pen) {
-    return y.map((_, i) => {
-      const Xi = X.filter((_, k) => k !== i), yi = y.filter((_, k) => k !== i);
-      return dot(fitRidge(Xi, yi, pen), X[i]);
-    });
-  }
-  /** Walk-forward: peers in listing order; each of the last 40% is priced by a fit on peers listed before it. */
-  function walkForwardPredictions(X, y, pen, listed) {
-    const dated = listed.map((d, i) => [d, i]).filter(([d]) => d).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
-    const start = Math.floor(dated.length * 0.6), out = [];
-    for (let k = start; k < dated.length; k++) {
-      const i = dated[k][1], train = dated.slice(0, k).map(([, j]) => j).filter((j) => listed[j] < listed[i]);
-      const b = fitRidge(train.map((j) => X[j]), train.map((j) => y[j]), pen);
-      out.push([i, dot(b, X[i])]);
-    }
-    return out;
-  }
+  const columns = (terms) => ['intercept', 'logTVL'].concat(...terms.map((t) => (t === 'kind' ? KINDS.map((k) => 'k_' + k) : [t])));
+  const feature = (r, c) => (c === 'intercept' ? 1 : c === 'logTVL' ? r.lt : c === 'growth' ? r.lg : c === 'age' ? r.ageUsed : r.kind === c.slice(2) ? 1 : 0);
+  const penalty = (c) => (c === 'intercept' || c === 'logTVL' ? 0 : c.startsWith('k_') ? 2 : 0.05);
 
   function fitValueModel(rows) {
-    const peers = rows.filter((r) => r.status === 'comp');
-    const y = peers.map((r) => Math.log10(r.mcap)), listed = peers.map((r) => r.listed);
+    const peers = rows.filter((r) => r.status === 'comp'), y = peers.map((r) => Math.log10(r.mcap));
+    const order = byListing(peers), start = Math.floor(order.length * 0.6);
+    // Forward test: each of the newest 40% is priced by a fit on the peers listed before it.
+    const forward = (fit, predict) => order.slice(start).map(([d, i], k) => {
+      const train = order.slice(0, start + k).filter(([dj]) => dj < d).map(([, j]) => j);
+      return [i, predict(fit(train), i)];
+    });
     const fits = MODELS.map((terms) => {
-      const cols = columns(terms), pen = cols.map(penaltyOf);
-      const X = peers.map((r) => cols.map((c) => featureOf(r, c)));
-      const coef = fitRidge(X, y, pen), loo = looPredictions(X, y, pen), wf = walkForwardPredictions(X, y, pen, listed);
-      const looErr = loo.map((v, i) => y[i] - v), wfErr = wf.map(([i, v]) => y[i] - v);
-      // Held-out log score of a normal error at the test's own spread, per peer, averaged over both tests and
-      // scaled back to the peer count: a model must predict well left-one-out AND forward in time to earn weight.
-      const score = (es) => {
-        const s2 = es.reduce((s, e) => s + e * e, 0) / es.length;
-        return -0.5 * Math.log(2 * Math.PI * s2) - 0.5;
-      };
-      const elpd = y.length * (score(looErr) + score(wfErr)) / 2;
-      return { terms, id: modelId(terms), cols, coef, loo, wf, rmsLoo: rms(looErr), rmsWf: rms(wfErr), elpd };
+      const cols = columns(terms), pen = cols.map(penalty), X = peers.map((r) => cols.map((c) => feature(r, c)));
+      const fitOn = (idx) => fitRidge(idx.map((j) => X[j]), idx.map((j) => y[j]), pen);
+      const loo = y.map((_, i) => dot(fitOn(y.map((_, k) => k).filter((k) => k !== i)), X[i]));
+      const wf = forward(fitOn, (b, i) => dot(b, X[i]));
+      const le = loo.map((v, i) => y[i] - v), we = wf.map(([i, v]) => y[i] - v);
+      // Held-out log score of a normal error at each test's own spread, both tests averaged: the model's evidence.
+      const score = (es) => -0.5 * Math.log(2 * Math.PI * rms(es) ** 2) - 0.5;
+      return { terms, id: ['log TVL'].concat(terms.map((t) => TERMS[t])).join(' + '), cols, pen, X, coef: fitOn(y.map((_, k) => k)), loo, wf,
+        missLoo: miss(le), missWf: miss(we), rmsLoo: rms(le), rmsWf: rms(we), evidence: y.length * (score(le) + score(we)) / 2 };
     });
     // Pseudo-Bayesian model averaging: weight = exp(held-out log score), normalised. No weight is set by hand.
-    const best = Math.max(...fits.map((f) => f.elpd));
-    const raw = fits.map((f) => Math.exp(f.elpd - best)), total = raw.reduce((a, b) => a + b, 0);
-    fits.forEach((f, m) => { f.weight = raw[m] / total; });
-    // The blend is one linear equation: each column's coefficient is the weighted sum over the models carrying it.
-    const allCols = columns(['growth', 'age', 'kind']), coef = {};
-    allCols.forEach((c) => { coef[c] = fits.reduce((s, f) => s + f.weight * (f.cols.includes(c) ? f.coef[f.cols.indexOf(c)] : 0), 0); });
-    const blendLoo = y.map((_, i) => fits.reduce((s, f) => s + f.weight * f.loo[i], 0));
-    const looErr = blendLoo.map((v, i) => y[i] - v);
-    const wfMap = new Map();
-    fits.forEach((f) => f.wf.forEach(([i, v]) => wfMap.set(i, (wfMap.get(i) || 0) + f.weight * v)));
-    const wfErr = [...wfMap.entries()].map(([i, v]) => y[i] - v);
-    // Conformal band: the blend's own held-out misses set the P10..P90 range around every implied value.
-    const sorted = sortNum(looErr);
-    const band = { p10: quantile(sorted, 0.1), p25: quantile(sorted, 0.25), p75: quantile(sorted, 0.75), p90: quantile(sorted, 0.9) };
-    const inside = (es, lo, hi) => es.filter((e) => e >= lo && e <= hi).length / es.length;
-    // Baseline a reader would try first: one flat mcap/TVL multiple, also left out one peer at a time.
-    const ratios = y.map((v, i) => v - peers[i].lt);
-    const flatErr = ratios.map((r, i) => r - quantile(sortNum(ratios.filter((_, k) => k !== i)), 0.5));
-    const termEffect = {};
-    Object.keys(TERMS).forEach((t) => {
-      const w = fits.filter((f) => f.terms.includes(t)).reduce((s, f) => s + f.weight, 0);
-      termEffect[t] = { label: TERMS[t].label, weight: w };
-    });
-    return {
-      peers: peers.length, fits, coef, band, termEffect,
-      rmsLoo: rms(looErr), rmsWf: rms(wfErr), rmsFlat: rms(flatErr), wfCount: wfErr.length,
-      looMiss: 10 ** medianAbs(looErr), wfMiss: 10 ** medianAbs(wfErr), flatMiss: 10 ** medianAbs(flatErr),
-      spearman: spearman(blendLoo, y), coverage50: inside(wfErr, band.p25, band.p75), coverage80: inside(wfErr, band.p10, band.p90),
-      looCoverage50: inside(looErr, band.p25, band.p75),
-      residual: new Map(peers.map((r, i) => [r.slug, looErr[i]])),
+    const top = Math.max(...fits.map((f) => f.evidence)), raw = fits.map((f) => Math.exp(f.evidence - top)), tot = raw.reduce((a, b) => a + b, 0);
+    fits.forEach((f, m) => { f.weight = raw[m] / tot; });
+    const blendCoef = (coefs) => {
+      const c = {};
+      columns(['growth', 'age', 'kind']).forEach((col) => { c[col] = fits.reduce((s, f, m) => s + f.weight * (f.cols.includes(col) ? coefs[m][f.cols.indexOf(col)] : 0), 0); });
+      return c;
     };
+    const coef = blendCoef(fits.map((f) => f.coef));
+    const le = y.map((v, i) => v - fits.reduce((s, f) => s + f.weight * f.loo[i], 0));
+    const wfAt = new Map();
+    fits.forEach((f) => f.wf.forEach(([i, v]) => wfAt.set(i, (wfAt.get(i) || 0) + f.weight * v)));
+    const we = [...wfAt].map(([i, v]) => y[i] - v);
+    // Conformal band: the blend's own leave-one-out misses set P10..P90 around every launch value.
+    const s = sortNum(le), band = { p10: quantile(s, 0.1), p25: quantile(s, 0.25), p75: quantile(s, 0.75), p90: quantile(s, 0.9) };
+    // Baseline: one flat mcap/TVL multiple (the peers' median), tested the same two ways.
+    const ratio = y.map((v, i) => v - peers[i].lt), med = (idx) => quantile(sortNum(idx.map((j) => ratio[j])), 0.5);
+    const flatLoo = ratio.map((r, i) => r - med(ratio.map((_, k) => k).filter((k) => k !== i)));
+    const flatWf = forward(med, (m, i) => ratio[i] - m).map(([, e]) => e);
+    const honesty = (es) => ({ x3: share(es, (e) => Math.abs(e) <= Math.log10(3)), p50: share(es, (e) => e >= band.p25 && e <= band.p75), p80: share(es, (e) => e >= band.p10 && e <= band.p90) });
+    const weightOf = (t) => fits.filter((f) => f.terms.includes(t)).reduce((a, f) => a + f.weight, 0);
+    return { peers, y, fits, coef, band, blendCoef, wfCount: we.length,
+      missLoo: miss(le), missWf: miss(we), rmsLoo: rms(le), rmsWf: rms(we), flatLoo: miss(flatLoo), flatWf: miss(flatWf), flatRms: rms(flatLoo),
+      honestLoo: honesty(le), honestWf: honesty(we), termWeight: { growth: weightOf('growth'), age: weightOf('age'), kind: weightOf('kind') },
+      residual: new Map(peers.map((r, i) => [r.slug, le[i]])) };
   }
+  const valueParts = (r, c) => ({ base: c.intercept + c.logTVL * r.lt, growth: c.growth * r.lg, age: c.age * r.ageUsed, kind: c['k_' + r.kind] || 0 });
+  const logValue = (r, c) => { const p = valueParts(r, c); return p.base + p.growth + p.age + p.kind; };
 
-  /** A protocol's implied value as the sum of its terms (log10 dollars), so the page can print the equation. */
-  function valueParts(row, model) {
-    const c = model.coef;
-    return {
-      base: c.intercept + c.logTVL * row.lt,
-      growth: c.growth * row.lg,
-      age: c.age * row.ageUsed,
-      kind: c['k_' + row.kind] || 0,
-    };
-  }
-
-  // ---------- 4. Token odds: how often protocols with this profile already record a token ----------
-  function oddsFeatures(r) {
-    return [1, r.lt, Math.min(r.ageUsed, 6), r.age === null ? 1 : 0, r.lg].concat(KINDS.map((k) => (r.kind === k ? 1 : 0)));
-  }
-  function fitLogistic(X, y, lambda) {
+  // ---------- 4. Token odds: the share of protocols like it that already record a token ----------
+  const oddsX = (r) => [1, r.lt, Math.min(r.ageUsed, 6), r.age === null ? 1 : 0, r.lg].concat(KINDS.map((k) => (r.kind === k ? 1 : 0)));
+  const ODDS_TERMS = ['size, log TVL', 'years listed', 'listing date missing', '7-day growth'];
+  const sigmoid = (z) => 1 / (1 + Math.exp(-z));
+  function fitLogistic(X, y) { // Newton steps with a ridge of 1 on every slope
     const p = X[0].length; let b = new Array(p).fill(0);
     for (let it = 0; it < 30; it++) {
-      const A = [], g = new Array(p).fill(0);
-      for (let i = 0; i < p; i++) A.push(new Array(p).fill(0));
+      const A = b.map(() => new Array(p).fill(0)), g = new Array(p).fill(0);
       X.forEach((x, n) => {
-        const mu = 1 / (1 + Math.exp(-dot(b, x))), w = Math.max(mu * (1 - mu), 1e-6);
+        const mu = sigmoid(dot(b, x)), w = Math.max(mu * (1 - mu), 1e-6);
         for (let i = 0; i < p; i++) { g[i] += x[i] * (y[n] - mu); for (let j = 0; j < p; j++) A[i][j] += w * x[i] * x[j]; }
       });
-      for (let i = 1; i < p; i++) { A[i][i] += lambda; g[i] -= lambda * b[i]; }
+      for (let i = 1; i < p; i++) { A[i][i] += 1; g[i] -= b[i]; }
       const step = solve(A, g);
       b = b.map((v, i) => v + step[i]);
       if (Math.max(...step.map(Math.abs)) < 1e-9) break;
     }
     return b;
   }
-  const sigmoid = (z) => 1 / (1 + Math.exp(-z));
-  function auc(scores, labels) {
-    const pos = [], neg = [];
-    scores.forEach((s, i) => (labels[i] ? pos : neg).push(s));
-    let win = 0;
-    for (const a of pos) for (const b of neg) win += a > b ? 1 : a === b ? 0.5 : 0;
-    return win / (pos.length * neg.length);
+  function auc(sc, lab) {
+    let win = 0, np = 0, nn = 0;
+    sc.forEach((a, i) => { if (!lab[i]) return; np++; sc.forEach((b, j) => { if (lab[j]) return; win += a > b ? 1 : a === b ? 0.5 : 0; }); });
+    nn = lab.length - np;
+    return win / (np * nn);
   }
-  /** Sample: every protocol the derivative rules keep, token or not. Tested with 10 folds by slug order. */
+  /** Sample: every stand-alone protocol, token or not. Tested in 10 folds and forward in listing order. */
   function fitOddsModel(rows) {
-    const sample = rows.filter((r) => r.status === 'comp' || r.status === 'pre' || (r.status === 'token' && !SET_ASIDE_CATEGORIES.includes(r.category)));
-    const X = sample.map(oddsFeatures), y = sample.map((r) => (r.status === 'pre' ? 0 : 1));
-    const coef = fitLogistic(X, y, 1);
-    const held = new Array(sample.length);
+    const S = rows.filter((r) => r.status === 'comp' || r.status === 'pre' || (r.status === 'token' && !SET_ASIDE.includes(r.category)));
+    const X = S.map(oddsX), y = S.map((r) => (r.status === 'pre' ? 0 : 1)), n = S.length;
+    const brier = (ps, idx) => idx.reduce((s, i, k) => s + (ps[k] - y[i]) ** 2, 0) / idx.length;
+    const held = [], base = [];
     for (let f = 0; f < 10; f++) {
-      const tr = sample.map((_, i) => i).filter((i) => i % 10 !== f);
-      const b = fitLogistic(tr.map((i) => X[i]), tr.map((i) => y[i]), 1);
-      sample.forEach((_, i) => { if (i % 10 === f) held[i] = sigmoid(dot(b, X[i])); });
+      const tr = S.map((_, i) => i).filter((i) => i % 10 !== f), rate = tr.reduce((s, i) => s + y[i], 0) / tr.length;
+      const b = fitLogistic(tr.map((i) => X[i]), tr.map((i) => y[i]));
+      S.forEach((_, i) => { if (i % 10 === f) { held[i] = sigmoid(dot(b, X[i])); base[i] = rate; } });
     }
-    const rate = y.reduce((a, b) => a + b, 0) / y.length;
-    return { coef, n: sample.length, tokenRate: rate, auc: auc(held, y), of: (r) => sigmoid(dot(coef, oddsFeatures(r))) };
+    const all = S.map((_, i) => i), order = byListing(S), cut = Math.floor(order.length * 0.6);
+    const tr = order.slice(0, cut).map(([, i]) => i), te = order.slice(cut).map(([, i]) => i);
+    const bw = fitLogistic(tr.map((i) => X[i]), tr.map((i) => y[i])), rateW = tr.reduce((s, i) => s + y[i], 0) / tr.length;
+    const coef = fitLogistic(X, y);
+    return { coef, n, tokens: y.reduce((a, b) => a + b, 0), auc: auc(held, y),
+      brier: brier(held, all), brierBase: brier(base, all), brierWf: brier(te.map((i) => sigmoid(dot(bw, X[i]))), te), brierWfBase: brier(te.map(() => rateW), te), wfCount: te.length,
+      of: (r) => sigmoid(dot(coef, oddsX(r))) };
   }
 
-  // ---------- 5. The farm plan: costed steps, capital sized to the edge, a verdict in dollars per hour ----------
-  /** Stated assumptions, not fitted: what a transaction costs, what share of supply a drop gives farmers, and risk. */
+  // ---------- 5. Farm plan: costed, timed steps; capital sized to the edge; a verdict in dollars an hour ----------
+  /** Stated assumptions, not fitted. */
   const ASSUME = {
-    airdropShare: 0.08, // share of the token's value paid to farmers, pro rata to deposits
-    hourTarget: 40, // dollars per hour of your time a plan must clear to be called FARM
+    airdropShare: 0.08, hourTarget: 25, tbill: 0.04,
     gas: { Ethereum: 2.5, Bitcoin: 3, Tron: 1, Binance: 0.1, Solana: 0.01, Sui: 0.02, Aptos: 0.02, Algorand: 0.01, Stellar: 0.01, Ripple: 0.01 },
-    gasL2: 0.05, // Base, Arbitrum, Optimism, Monad and other rollups or fast chains
-    gasOther: 0.3,
-    cheapChains: ['Base', 'Arbitrum', 'Optimism', 'Monad', 'Ink', 'Unichain', 'Plasma', 'Linea', 'Scroll', 'Polygon', 'Avalanche', 'Sonic', 'Berachain', 'Hyperliquid L1', 'Mantle', 'Flare', 'Plume Mainnet', 'Katana', 'Arc'],
+    gasL2: 0.05, gasOther: 0.3,
+    cheap: 'Base|Arbitrum|Optimism|Monad|Ink|Unichain|Plasma|Linea|Scroll|Polygon|Avalanche|Sonic|Berachain|Hyperliquid L1|Mantle|Flare|Plume Mainnet|Katana|Arc'.split('|'),
     riskApr: { vault: 0.02, lend: 0.025, dex: 0.045, perp: 0.01, yield: 0.03, rwa: 0.012, stake: 0.03, infra: 0.025 },
-    youngExtra: 0.015, // extra risk a year for a protocol on record under six months
-    tiers: [500, 1000, 2500, 5000, 10000, 25000, 50000],
+    youngExtra: 0.015, tiers: [500, 1000, 2500, 5000, 10000, 25000, 50000],
   };
-  const gasOn = (chain) => (chain in ASSUME.gas ? ASSUME.gas[chain] : ASSUME.cheapChains.includes(chain) ? ASSUME.gasL2 : ASSUME.gasOther);
-  const entryFee = (chain) => (chain === 'Ethereum' || chain === 'Bitcoin' ? 4 : 1);
-
-  /** What a reader does, by kind: [title, what to do, transactions, minutes]. `C` is the plan's capital. */
+  const gasOn = (c) => (c in ASSUME.gas ? ASSUME.gas[c] : ASSUME.cheap.includes(c) ? ASSUME.gasL2 : ASSUME.gasOther);
+  const entryFee = (c) => (c === 'Ethereum' || c === 'Bitcoin' ? 4 : 1);
+  /** What a reader does, by kind: [step, when, what, transactions, minutes]. */
   const PLAYBOOK = {
-    vault: (C) => [['Deposit', `deposit ${usd(C)} USDC into its largest USDC vault (approve + deposit)`, 2, 10]],
-    lend: (C) => [['Supply', `supply ${usd(C)} USDC (approve + supply)`, 2, 10], ['Borrow', `borrow ${usd(C * 0.3)} of a second asset and resupply it once, keeping the health factor above 2, so both sides earn points`, 2, 15]],
-    dex: (C) => [['Provide', `add ${usd(C)} as liquidity in its deepest stable or major pair (two approvals + add)`, 3, 15], ['Trade', `route about ${usd(C * 0.1)} of swaps through it each week; budget one swap a week`, 0, 0]],
-    perp: (C) => [['Margin', `deposit ${usd(C)} as margin (approve + deposit)`, 2, 10], ['Trade', `trade about ${usd(C * 8)} of volume over the season on majors at 2x or less; fees near 0.05% cost ${usd(C * 8 * 0.0005)}`, 6, 60]],
-    yield: (C) => [['Mint', `mint or deposit ${usd(C)} into its yield token or vault (approve + mint); do not loop it`, 2, 10]],
-    rwa: (C) => [['Onboard', 'pass its KYC or whitelist (30 minutes of forms, often 1 to 3 days of waiting)', 0, 30], ['Subscribe', `subscribe ${usd(C)} once whitelisted (approve + subscribe)`, 2, 10]],
-    stake: (C) => [['Stake', `stake or restake ${usd(C)} of the asset it accepts (approve + stake); note the unbonding delay before you count on exit`, 2, 15]],
-    infra: (C) => [['Use', `use the product with ${usd(C)}: four round trips over the season (bridge, pay or mint and back)`, 8, 40]],
+    vault: (C) => [['Deposit', 'Day 0', `deposit ${usd(C)} USDC into its largest USDC vault (approve + deposit); note whether the receipt token earns points where it is held`, 2, 10]],
+    lend: (C) => [['Supply', 'Day 0', `supply ${usd(C)} USDC (approve + supply)`, 2, 10], ['Borrow', 'Day 0', `borrow ${usd(C * 0.3)} of a second asset and resupply it once, health factor above 2, so both sides earn points`, 2, 15]],
+    dex: (C) => [['Provide', 'Day 0', `add ${usd(C)} as liquidity in its deepest stable or major pair (two approvals + add)`, 3, 15], ['Trade', 'Weekly', `route about ${usd(C * 0.1)} of swaps through it each week`, 0, 0]],
+    perp: (C) => [['Margin', 'Day 0', `deposit ${usd(C)} as margin (approve + deposit)`, 2, 10], ['Trade', 'Weekly', `trade about ${usd(C * 8)} of volume over the season on majors at 2x or less; fees near 0.05%`, 6, 60]],
+    yield: (C) => [['Mint', 'Day 0', `mint or deposit ${usd(C)} into its yield token or vault (approve + mint); do not loop it`, 2, 10]],
+    rwa: (C) => [['Onboard', 'Day 0', 'pass its KYC or whitelist: 30 minutes of forms, then 1 to 3 days of waiting', 0, 30], ['Subscribe', 'Day 3', `subscribe ${usd(C)} once whitelisted (approve + subscribe)`, 2, 10]],
+    stake: (C) => [['Stake', 'Day 0', `stake or restake ${usd(C)} of the asset it accepts (approve + stake); note the unbonding delay before counting on exit`, 2, 15]],
+    infra: (C) => [['Use', 'Monthly', `use the product with ${usd(C)}: four round trips over the season (bridge, pay or mint and back)`, 8, 40]],
   };
+  /** Days to hold: long on record means fewer seasons left before a snapshot, so a shorter plan. */
+  const holdDays = (r) => (r.age === null ? 120 : r.age < 1 ? 180 : r.age < 2 ? 120 : 90);
 
-  /** Days to hold: a protocol long on record has fewer seasons left before a snapshot, so the plan is shorter. */
-  const holdDays = (row) => (row.age === null ? 120 : row.age < 1 ? 180 : row.age < 2 ? 120 : 90);
-
-  function farmEconomics(row, value, odds, C, share) {
-    const chain = row.chains.slice().sort((a, b) => gasOn(a) - gasOn(b) || row.chains.indexOf(a) - row.chains.indexOf(b))[0];
-    const gas = gasOn(chain), hold = holdDays(row), weeks = Math.round(hold / 7);
-    const actions = PLAYBOOK[row.kind](C);
-    const weeklyTx = row.kind === 'dex' ? weeks : 0;
-    const tx = actions.reduce((s, a) => s + a[2], 0) + weeklyTx + 2; // + exit and claim
+  function farmEconomics(r, C, sh) {
+    const chain = r.chains.slice().sort((a, b) => gasOn(a) - gasOn(b) || r.chains.indexOf(a) - r.chains.indexOf(b))[0];
+    const gas = gasOn(chain), hold = holdDays(r), weeks = Math.round(hold / 7), actions = PLAYBOOK[r.kind](C);
+    const tx = actions.reduce((s, a) => s + a[3], 0) + (r.kind === 'dex' ? weeks : 0) + 2; // + exit and claim
     const fixed = entryFee(chain) + gas * tx;
-    const minutes = 15 + 15 + actions.reduce((s, a) => s + a[3], 0) + (row.kind === 'dex' ? weeks * 2 : 0) + weeks * 5 + 10 + 15;
-    const hazard = -Math.log(1 - odds) / Math.max(row.ageUsed, 0.5);
-    const launch = 1 - Math.exp(-hazard * (hold / 365 + 0.25));
+    const minutes = 10 + 15 + 15 + actions.reduce((s, a) => s + a[4], 0) + (r.kind === 'dex' ? weeks * 2 : 0) + weeks * 5 + 10 + 15 + weeks * 2;
+    const hazard = -Math.log(1 - r.odds) / Math.max(r.ageUsed, 0.5), launch = 1 - Math.exp(-hazard * (hold / 365 + 0.25));
     // Growth dilutes: a month of this week's inflow joins the pool you share; a shrinking pool counts as it is.
-    const pool = row.tvl * clamp(1 + 4 * clamp(row.change7d || 0, -40, 40) / 100, 0.6, 3);
-    const risk = (ASSUME.riskApr[row.kind] + (row.age !== null && row.age < 0.5 ? ASSUME.youngExtra : 0)) * hold / 365;
-    const perpFees = row.kind === 'perp' ? 8 * 0.0005 : 0;
-    const dropPerDollar = (v) => (share * v * launch) / pool;
-    const net = (v) => C * (dropPerDollar(v) - risk - perpFees) - fixed;
-    return {
-      chain, gas, hold, weeks, tx, fixed, minutes, hours: minutes / 60, launch, pool, risk, perpFees, actions,
-      expected: C * dropPerDollar(value.mid), expectedLo: C * dropPerDollar(value.p25), expectedHi: C * dropPerDollar(value.p75),
-      carry: C * (risk + perpFees), net: net(value.mid), netLo: net(value.p25), netHi: net(value.p75),
-      edge: dropPerDollar(value.mid) - risk - perpFees,
-    };
-  }
-
-  /** The plan at one capital, with its verdict: FARM clears the hourly target even at the P25 value. */
-  function planAt(row, C, share) {
-    const e = farmEconomics(row, row.value, row.odds, C, share);
-    e.capital = C;
+    const pool = r.tvl * clamp(1 + 4 * clamp(r.change7d || 0, -40, 40) / 100, 0.6, 3);
+    const risk = (ASSUME.riskApr[r.kind] + (r.age !== null && r.age < 0.5 ? ASSUME.youngExtra : 0)) * hold / 365;
+    const fees = r.kind === 'perp' ? 8 * 0.0005 : 0, drop = (v) => (sh * v * launch) / pool, net = (v) => C * (drop(v) - risk - fees) - fixed;
+    const e = { capital: C, chain, gas, hold, weeks, tx, fixed, minutes, hours: minutes / 60, launch, pool, risk, fees, actions, share: sh,
+      expected: C * drop(r.value.mid), expectedLo: C * drop(r.value.p25), expectedHi: C * drop(r.value.p75), carry: C * (risk + fees),
+      net: net(r.value.mid), netLo: net(r.value.p25), netHi: net(r.value.p75), edge: drop(r.value.mid) - risk - fees, tbill: C * ASSUME.tbill * hold / 365 };
     e.hourly = e.net / e.hours;
-    e.verdict = e.hourly >= ASSUME.hourTarget && e.netLo > 0 ? 'FARM' : e.net > 0 ? 'MARGINAL' : 'SKIP';
+    // FARM: the modelled net pays the hourly target; MARGINAL: it covers its costs; SKIP: fees and risk beat the drop.
+    e.verdict = e.net > 0 && e.hourly >= ASSUME.hourTarget ? 'FARM' : e.net > 0 ? 'MARGINAL' : 'SKIP';
     e.minViable = e.edge > 0 ? Math.ceil(e.fixed / e.edge) : null;
     return e;
   }
-
-  /** Capital: the smallest tier that clears the hourly target, never above 1% of the pool. */
-  function sizePlan(row, share) {
-    const cap = Math.max(ASSUME.tiers[0], row.tvl * 0.01);
-    const tiers = ASSUME.tiers.filter((c) => c <= cap);
-    for (const C of tiers) {
-      const e = planAt(row, C, share);
-      if (e.verdict === 'FARM') return e;
-    }
-    // No tier clears the target: a positive edge grows with size, a negative one shrinks, so take the end that loses least.
-    return planAt(row, planAt(row, tiers[0], share).edge > 0 ? tiers[tiers.length - 1] : tiers[0], share);
+  /** Capital: the smallest tier that earns FARM, never above 1% of the pool; else the end that loses least. */
+  function sizePlan(r, sh) {
+    const tiers = ASSUME.tiers.filter((c) => c <= Math.max(ASSUME.tiers[0], r.tvl * 0.01));
+    for (const C of tiers) { const e = farmEconomics(r, C, sh); if (e.verdict === 'FARM') return e; }
+    return farmEconomics(r, farmEconomics(r, tiers[0], sh).edge > 0 ? tiers[tiers.length - 1] : tiers[0], sh);
   }
-
-  /** The farm plan, step by step: { step, text, cost (dollars), minutes }. board.json carries the text, which
-   * states the same cost and time, so the table on the page and the board never disagree. */
-  function farmPlan(row, e, asOf, share) {
-    const C = e.capital, g = e.gas, steps = [];
-    const cost = (x) => (x < 0.995 ? `$${x.toFixed(2)}` : usd(x));
-    const add = (step, text, dollars, minutes) => steps.push({ step, text: `${step}: ${text}`, cost: dollars, minutes });
-    add('Check', `DefiLlama records no token for ${row.name} on ${asOf}; read its docs, X and CoinGecko for a live token or a points page before funding. Cost $0, about 15 min.`, 0, 15);
+  /** The plan, step by step: { step, when, text, cost, minutes }. board.json carries the text, which states the same figures. */
+  function farmPlan(r, e, asOf) {
+    const C = e.capital, g = e.gas, H = e.hold, out = [], cost = (x) => (x > 0 && x < 0.995 ? `$${x.toFixed(2)}` : usd(x));
+    const add = (step, when, text, dollars, minutes) => out.push({ step, when, text: `${step} (${when}): ${text}`, cost: dollars, minutes });
+    add('Wallet', 'Day 0', 'set up a fresh wallet used only for this farm (hardware-backed if you hold more than a few thousand dollars). Cost $0, about 10 min.', 0, 10);
+    add('Verify', 'Day 0', `DefiLlama records no token for ${r.name} on ${asOf}; check its docs, X and CoinGecko for a live token or a points page and match the contract addresses; never sign from a link in a DM. Cost $0, about 15 min.`, 0, 15);
     const fee = entryFee(e.chain);
-    add('Fund', `withdraw ${usd(C)} USDC from an exchange straight to ${e.chain}${row.chains.length > 1 ? `, the cheapest of its ${row.chains.length} chains` : ', its only chain'}, and keep gas for ${e.tx} transactions at about ${cost(g)} each. Cost ${cost(fee)} withdrawal fee, about 15 min.`, fee, 15);
-    e.actions.forEach(([title, what, tx, min]) => {
-      if (title === 'Trade' && row.kind === 'dex') {
-        add(title, `${what}. Cost ${cost(e.weeks * g)} gas over ${e.weeks} weeks, about 2 min a week.`, e.weeks * g, e.weeks * 2);
-        return;
-      }
-      const fees = title === 'Trade' ? C * e.perpFees : 0;
-      add(title, `${what}. Cost ${cost(tx * g + fees)}${fees ? ' in fees and gas' : ' gas'}, about ${min} min.`, tx * g + fees, min);
+    add('Fund', 'Day 0', `withdraw ${usd(C)} USDC from an exchange straight to ${e.chain}${r.chains.length > 1 ? `, the cheapest of its ${r.chains.length} chains` : ', its only chain'}, keeping gas for ${e.tx} transactions at about ${cost(g)}. Cost ${cost(fee)}, about 15 min.`, fee, 15);
+    e.actions.forEach(([step, when, what, tx, min]) => {
+      if (step === 'Trade' && r.kind === 'dex') return add(step, `Weekly x${e.weeks}`, `${what}. Cost ${cost(e.weeks * g)} gas, about 2 min a week.`, e.weeks * g, e.weeks * 2);
+      const f = step === 'Trade' ? C * e.fees : 0;
+      add(step, step === 'Trade' ? `Weekly x${e.weeks}` : when, `${what}. Cost ${cost(tx * g + f)}${f ? ' in fees and gas' : ' gas'}, about ${min} min.`, tx * g + f, min);
     });
-    add('Hold', `keep it in for ${e.hold} days; check points and the TVL trend weekly (${e.weeks} checks x 5 min). Carry: ${(e.risk * 365 / e.hold * 100).toFixed(1)}% a year of contract and depeg risk on ${usd(C)} = ${usd(C * e.risk)}.`, C * e.risk, e.weeks * 5);
-    add('Exit rules', `withdraw early if TVL falls 25% in a week (this week ${pct(row.change7d)}), the points terms change, or a token is announced with its snapshot already past. Cost ${cost(g)} for the exit, about 10 min.`, g, 10);
-    add('Claim', `if a token lists, claim and sell or hedge half on day one. At ${(share * 100).toFixed(0)}% of supply to farmers and ${(e.launch * 100).toFixed(0)}% launch odds in the window, ${usd(C)} earns about ${usd(e.expected)} (P25 ${usd(e.expectedLo)}, P75 ${usd(e.expectedHi)}). Cost ${cost(g)}, about 15 min.`, g, 15);
-    const mv = e.minViable === null ? 'none: the risk carry beats the expected drop at any size' : usd(e.minViable);
-    steps.push({ step: 'Verdict', text: `Verdict ${e.verdict}: net about ${usd(e.net)} (P25 ${usd(e.netLo)}) for ${e.hours.toFixed(1)} h of your time = ${usd(e.hourly)} an hour against a ${usd(ASSUME.hourTarget)} target. Break-even capital: ${mv}.`, cost: null, minutes: null });
-    return steps;
+    add('Hold', `Days 1-${H}`, `keep it in ${H} days and check points and TVL weekly (${e.weeks} x 5 min). Carry: ${(e.risk * 365 / H * 100).toFixed(1)}% a year of contract and depeg risk on ${usd(C)} = ${usd(C * e.risk)}.`, C * e.risk, e.weeks * 5);
+    add('Exit rule', 'Any day', `withdraw if TVL prints below ${usd(r.tvl * 0.75)} (25% under today's ${usd(r.tvl)}; this week ${pct(r.change7d)}), if the points terms change, or if a token is announced with its snapshot past. Cost ${cost(g)}, about 10 min.`, g, 10);
+    add('Record', `Weekly x${e.weeks}`, 'log every transaction (date, hash, asset, amount, dollar value): a claim may ask the wallet to prove its history, and a drop is taxable in many places. Cost $0, about 2 min a week.', 0, e.weeks * 2);
+    add('Claim', `Day ${H}+`, `if a token lists, claim and sell or hedge half on day one. At ${(e.share * 100).toFixed(0)}% of supply to farmers and ${(e.launch * 100).toFixed(0)}% launch odds in the window, ${usd(C)} earns about ${usd(e.expected)} (P25 ${usd(e.expectedLo)}, P75 ${usd(e.expectedHi)}). Cost ${cost(g)}, about 15 min.`, g, 15);
+    out.push({ step: 'Verdict', when: '', text: `Verdict ${e.verdict}: net about ${usd(e.net)} (P25 ${usd(e.netLo)}) for ${e.hours.toFixed(1)} h of your time = ${usd(e.hourly)} an hour against a ${usd(ASSUME.hourTarget)} target; the same money in a 4% T-bill earns ${usd(e.tbill)}. Break-even capital: ${e.minViable === null ? 'none, the risk carry beats the drop at any size' : usd(e.minViable)}.`, cost: null, minutes: null });
+    return out;
   }
 
-  // ---------- 6. Formatting shared by the board and the page ----------
+  // ---------- 6. Formatting ----------
   function usd(x) {
     const a = Math.abs(x), s = x <= -0.5 ? '-$' : '$';
     if (a >= 1e9) return s + (a / 1e9).toFixed(a >= 1e10 ? 1 : 2) + 'B';
@@ -384,50 +284,62 @@
   }
   const pct = (x) => (x == null ? 'unreported' : (x > 0 ? '+' : '') + x.toFixed(1) + '%');
 
-  // ---------- 7. The radar: every protocol accounted for, the pre-token ones ranked ----------
-  function buildRadar(snapshot, opts) {
-    const share = (opts && opts.airdropShare) || ASSUME.airdropShare;
-    const rows = prepare(snapshot);
-    const model = fitValueModel(rows);
-    const odds = fitOddsModel(rows);
-    const b = model.band;
-    for (const r of rows) {
-      r.parts = valueParts(r, model);
-      const lv = r.parts.base + r.parts.growth + r.parts.age + r.parts.kind;
-      r.value = { log: lv, mid: 10 ** lv, p10: 10 ** (lv + b.p10), p25: 10 ** (lv + b.p25), p75: 10 ** (lv + b.p75), p90: 10 ** (lv + b.p90) };
-      r.odds = r.status === 'pre' ? odds.of(r) : null;
-      if (r.status === 'comp') r.residual = model.residual.get(r.slug);
+  // ---------- 7. The radar ----------
+  /** implied value = launch value (what the token would be worth) x token odds (share of peers like it with a token). */
+  function rankAll(pre, coef, band) {
+    for (const r of pre) {
+      const lv = logValue(r, coef);
+      r.value = { log: lv, mid: 10 ** lv, p10: 10 ** (lv + band.p10), p25: 10 ** (lv + band.p25), p75: 10 ** (lv + band.p75), p90: 10 ** (lv + band.p90) };
+      r.score = r.value.mid * r.odds;
     }
-    const ranked = rows.filter((r) => r.status === 'pre').sort((x, y) => y.value.mid - x.value.mid || (x.slug < y.slug ? -1 : 1));
+    return pre.slice().sort((a, b) => b.score - a.score || (a.slug < b.slug ? -1 : 1));
+  }
+  /** Bootstrap: refit every model on 200 resamples of the peers (weights held) and record each row's rank range. */
+  function bootstrap(model, pre, n) {
+    const rand = rng(20261114), P = model.peers.length, ranks = new Map(pre.map((r) => [r.slug, []])), slopes = [];
+    for (let b = 0; b < n; b++) {
+      const idx = Array.from({ length: P }, () => Math.floor(rand() * P));
+      const coef = model.blendCoef(model.fits.map((f) => fitRidge(idx.map((j) => f.X[j]), idx.map((j) => model.y[j]), f.pen)));
+      slopes.push(coef.logTVL);
+      pre.map((r) => [r, 10 ** logValue(r, coef) * r.odds]).sort((a, c) => c[1] - a[1]).forEach(([r], k) => ranks.get(r.slug).push(k + 1));
+    }
+    pre.forEach((r) => { const s = sortNum(ranks.get(r.slug)); r.range = [quantile(s, 0.05), quantile(s, 0.95)].map(Math.round); });
+    const s = sortNum(slopes);
+    return { n, slopeLo: quantile(s, 0.05), slopeHi: quantile(s, 0.95) };
+  }
+
+  function buildRadar(snap, opts) {
+    const sh = (opts && opts.airdropShare) || ASSUME.airdropShare;
+    const rows = prepare(snap), model = fitValueModel(rows), odds = fitOddsModel(rows);
+    const pre = rows.filter((r) => r.status === 'pre');
+    pre.forEach((r) => { r.odds = odds.of(r); });
+    for (const r of rows) if (r.status !== 'pre') { const lv = logValue(r, model.coef); r.value = { log: lv, mid: 10 ** lv }; }
+    model.peers.forEach((r) => { r.residual = model.residual.get(r.slug); });
+    const ranked = rankAll(pre, model.coef, model.band);
     let prev = Infinity;
     ranked.forEach((r, i) => {
       r.rank = i + 1;
-      r.implied = Math.max(1, Math.min(prev, Math.round(r.value.mid)));
+      r.implied = Math.max(1, Math.min(prev, Math.round(r.score)));
       prev = r.implied;
-      r.farm = sizePlan(r, share);
-      r.plan = farmPlan(r, r.farm, snapshot.as_of, share);
+      r.farm = sizePlan(r, sh);
+      r.plan = farmPlan(r, r.farm, snap.as_of);
     });
+    const boot = bootstrap(model, pre, 200);
     const count = (s) => rows.filter((r) => r.status === s).length;
-    return {
-      asOf: snapshot.as_of, source: snapshot.source, floor: snapshot.floor_usd, rows, ranked, model, odds, share,
-      counts: { all: rows.length, comp: count('comp'), token: count('token'), aside: count('aside'), pre: ranked.length,
-        watch: snapshot.watchlist.length, watchRanked: ranked.filter((r) => r.watch).length },
-    };
+    return { asOf: snap.as_of, source: snap.source, floor: snap.floor_usd, rows, ranked, model, odds, boot, share: sh, checksum: checksum(ranked),
+      total: ranked.reduce((s, r) => s + r.implied, 0),
+      counts: { all: rows.length, comp: count('comp'), token: count('token'), aside: count('aside'), pre: ranked.length, watch: snap.watchlist.length, watchRanked: ranked.filter((r) => r.watch).length } };
   }
 
   /** board.json rows: the gate's five fields plus the figures behind them. */
-  function boardRows(radar) {
-    return radar.ranked.map((r) => ({
-      rank: r.rank, slug: r.slug, name: r.name, implied_value_usd: r.implied,
-      implied_p25_usd: Math.round(r.value.p25), implied_p75_usd: Math.round(r.value.p75),
-      tvl_usd: r.tvl, change_7d: r.change7d, years_on_record: r.age === null ? null : Number(r.age.toFixed(2)),
-      category: r.category, kind: r.kind, watchlist: r.watch, token_odds: Number(r.odds.toFixed(4)),
-      farm_verdict: r.farm.verdict, farm_capital_usd: r.farm.capital, farm_net_usd: Math.round(r.farm.net),
-      farm_hours: Number(r.farm.hours.toFixed(2)), farm_steps: r.plan.map((s) => s.text),
-    }));
-  }
+  const boardRows = (R) => R.ranked.map((r) => ({
+    rank: r.rank, slug: r.slug, name: r.name, implied_value_usd: r.implied, launch_value_usd: Math.round(r.value.mid), token_odds: Number(r.odds.toFixed(4)),
+    launch_p25_usd: Math.round(r.value.p25), launch_p75_usd: Math.round(r.value.p75), rank_range_p5_p95: r.range,
+    tvl_usd: r.tvl, change_7d: r.change7d, years_listed: r.age === null ? null : Number(r.age.toFixed(2)), category: r.category, kind: r.kind, watchlist: r.watch,
+    farm_verdict: r.farm.verdict, farm_capital_usd: r.farm.capital, farm_net_usd: Math.round(r.farm.net), farm_hours: Number(r.farm.hours.toFixed(2)),
+    farm_steps: r.plan.map((s) => s.text) }));
 
-  const api = { buildRadar, boardRows, classify, fitRidge, quantile, usd, pct, ASSUME, KINDS, KIND_LABEL, sizePlan, planAt, farmPlan, holdDays, valueParts };
+  const api = { buildRadar, boardRows, checksum, farmEconomics, farmPlan, sizePlan, valueParts, quantile, usd, pct, ASSUME, KINDS, KIND_LABEL, ODDS_TERMS, TERMS };
   root.RadarModel = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
