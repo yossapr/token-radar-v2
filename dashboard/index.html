@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pre-token radar: launches ranked by implied value, with costed farm plans</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="mast">
+  <div class="brand"><span class="mark" aria-hidden="true"></span><div><p class="kicker">Pre-token radar</p><h1>Which launches are worth farming</h1></div></div>
+  <p class="src" id="src"></p>
+</header>
+<section class="ledger" id="ledger" aria-label="Where every protocol in the snapshot went"></section>
+<nav class="tabs" id="tabs" aria-label="Views"></nav>
+<section class="filters" id="filters" aria-label="Filters"></section>
+<div class="layout">
+  <main id="main" tabindex="-1"></main>
+  <aside id="rail" aria-label="Model and detail"></aside>
+</div>
+<script src="model.js"></script>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
