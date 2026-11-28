@@ -8,5 +8,5 @@ shot() { timeout 90 "$EDGE" --headless=new --disable-gpu --hide-scrollbars --win
 mkdir -p "$DEST"
 shot 1-board.png "tab=board"
 shot 2-detail.png "open=$SLUG"
-shot 3-filtered.png "v=FARM&sort=hourly&fold=1&cmp=temple,turboflow-perps,granite"
+shot 3-filtered.png "v=FARM&sort=hourly&fold=1&cmp=temple,anthias-labs,stellar-amm"
 ls -la "$DEST"

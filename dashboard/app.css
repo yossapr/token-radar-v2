@@ -18,7 +18,7 @@ small { display: block; color: var(--dim); font-size: 10.5px; font-weight: 400; 
 h1 { font-size: 22px; line-height: 1.05; } .sub, .src { margin: 0; color: var(--soft); font-size: 11.5px; }
 
 /* small-caps labels */
-.tt, .lh h2, .mini th, .board th, .kv dt, .wl, .ea { text-transform: uppercase; letter-spacing: .07em; }
+.tt, .lh h2, .mini th, .board th, .kv dt, .wl, .ea, .ol { text-transform: uppercase; letter-spacing: .07em; }
 .tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 10px 0; }
 .tile { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
 .tt { margin: 0; font-size: 10px; color: var(--soft); font-weight: 700; }
@@ -79,8 +79,9 @@ select, #q, .btn { border: 1px solid var(--line); background: var(--card); borde
 .board tr.sel { background: var(--teal-w); box-shadow: inset 3px 0 var(--teal); }
 .rk { text-align: right; font-family: var(--mono); width: 54px; } .rk small { font-family: var(--mono); }
 .pn b { font-weight: 600; } .pn small { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wl, .ea { font-style: normal; font-size: 9px; border-radius: 3px; padding: 0 4px; margin-left: 5px; vertical-align: 1px; }
-.wl { color: var(--teal); border: 1px solid var(--teal); } .ea { color: var(--amber); border: 1px solid #dcb878; }
+.wl, .ea, .ol { font-style: normal; font-size: 9px; border-radius: 3px; padding: 0 4px; margin-left: 5px; vertical-align: 1px; }
+.wl { color: var(--teal); border: 1px solid var(--teal); } .ea { color: var(--amber); border: 1px solid #dcb878; } .ol { color: var(--rust); border: 1px solid #d9a99c; }
+.mini .keep td { background: #eef4ec; }
 .ob { display: block; width: 52px; height: 4px; background: var(--line2); border-radius: 2px; margin: 3px 0 0 auto; overflow: hidden; }
 .iv { min-width: 170px; } .iv small { font-family: var(--mono); }
 .band { position: relative; display: block; height: 8px; margin-top: 2px; background: linear-gradient(var(--line2), var(--line2)) center/100% 1px no-repeat; }
